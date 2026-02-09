@@ -1,0 +1,16 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "/^python veri_cek\\.py$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^python -c \"\nimport ccxt\nimport pandas as pd\nfrom datetime import datetime, timedelta\n\nexchange = ccxt\\.binance\\(\\{'enableRateLimit': True, 'options': \\{'defaultType': 'future'\\}\\}\\)\n\n# 15 günlük veri çek\nend_date = datetime\\.utcnow\\(\\)\nstart_date = end_date - timedelta\\(days=15\\)\nsince = int\\(start_date\\.timestamp\\(\\) \\* 1000\\)\n\nprint\\('BNB/USDT verisi çekiliyor\\.\\.\\.'\\)\ndata = exchange\\.fetch_ohlcv\\('BNB/USDT:USDT', '15m', since=since, limit=1500\\)\n\ndf = pd\\.DataFrame\\(data, columns=\\['timestamp', 'open', 'high', 'low', 'close', 'volume'\\]\\)\ndf\\['timestamp'\\] = pd\\.to_datetime\\(df\\['timestamp'\\], unit='ms'\\)\ndf\\['symbol'\\] = 'BNB/USDT:USDT'\ndf\\.to_csv\\('backtest_data/BNB_USDT_USDT\\.csv', index=False\\)\n\nprint\\(f'✅ \\{len\\(df\\)\\} mum kaydedildi'\\)\nprint\\(f'Tarih: \\{df\\.iloc\\[0\\]\\[\\\\\"timestamp\\\\\"\\]\\} - \\{df\\.iloc\\[-1\\]\\[\\\\\"timestamp\\\\\"\\]\\}'\\)\n\"\n$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^python -c \"import pandas as pd; df=pd\\.read_csv\\('backtest_data/BNB_USDT_USDT\\.csv'\\); print\\(f'BNB verisi: \\{len\\(df\\)\\} mum'\\)\"$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}
