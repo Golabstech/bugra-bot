@@ -13,19 +13,19 @@ pd.set_option('future.no_silent_downcasting', True)
 DATA_FOLDER = "backtest_data"
 INITIAL_BALANCE = 1000
 POSITION_SIZE_PCT = 10
-LEVERAGE = 10
+LEVERAGE = 5
 MAKER_FEE = 0.0002
 TAKER_FEE = 0.0005
 
-# 📅 TARİH ARALIĞI (değiştirilebilir)
-BACKTEST_START = datetime(2026, 1, 25, 0, 0, 0)
-BACKTEST_END = datetime(2026, 2, 8, 23, 59, 59)
+# 📅 TARİH ARALIĞI (Final Test: 90 Günlük Karma Senaryo)
+BACKTEST_START = datetime(2025, 11, 10, 0, 0, 0)
+BACKTEST_END = datetime(2026, 2, 10, 23, 59, 59)
 
 # 🎯 TEK COİN TEST (None = tüm coinler)
-SINGLE_COIN = "HBAR/USDT:USDT"  # Test edilecek coin
+SINGLE_COIN = None  # Tüm coinler test edilsin
 
-# 📋 İŞLEM DETAYLARI GÖSTER
-SHOW_TRADE_DETAILS = True
+# 📋 İŞLEM DETAYLARI GÖSTER (Kapsamlı testte False olması daha iyi)
+SHOW_TRADE_DETAILS = False
 
 # ⚡ STRATEJİ FİLTRELERİ
 SCORE_THRESHOLD = 80
@@ -34,8 +34,9 @@ COOLDOWN_CANDLES = 8
 MAX_TRADES_PER_COIN = 20  # Dönem başına
 
 # 🎯 VOLATİLİTE FİLTRESİ
-MAX_ATR_PERCENT = 5.0
+MAX_ATR_PERCENT = 4.5   # Biraz daha esnek volatilite
 MIN_ATR_PERCENT = 0.5
+HARD_STOP_LOSS_PCT = 7.0 # %7'den fazla zarara ASLA izin verme (PIPPIN Koruması)
 
 # 🎯 PARTIAL TP ORANLARI
 TP1_CLOSE_PCT = 0.30
@@ -65,7 +66,7 @@ def calculate_indicators(df):
     macd = ta.macd(df['close'])
     if macd is not None:
         df['macd'] = macd.iloc[:, 0]
-        df['macd_signal'] = macd.iloc[:, 1]
+        df['macd_signal'] = macd.iloc[:, 2]  # Sinyal çizgisi index 2'dedir
     else:
         df['macd'] = df['macd_signal'] = 0
     
@@ -181,6 +182,9 @@ def backtest_coin(symbol, df):
     position_remaining = 1.0
     last_exit_candle = -999
     trade_count = 0
+    entry_reasons = []  # Yeni eklendi
+    consecutive_losses = 0 # Yeni: Üst üste zarar takibi
+    block_until_candle = 0 # Yeni: Devre kesici bitişi
     
     # Volatilite kontrolü
     if len(df) > 50:
@@ -213,14 +217,31 @@ def backtest_coin(symbol, df):
             # Stop Loss kontrol
             if high >= stop_loss:
                 pnl_pct = ((entry_price - stop_loss) / entry_price) * 100 * position_remaining
+                
+                # Hard Stop Check (Eğer ATR stop'u çok genişse %7'de kes)
+                if abs(pnl_pct) > HARD_STOP_LOSS_PCT:
+                     pnl_pct = -HARD_STOP_LOSS_PCT
+                     stop_loss = entry_price * (1 + HARD_STOP_LOSS_PCT/100)
+                
                 result_text = 'STOP LOSS'
                 if tp1_hit: result_text = 'TRAILING (TP1+)'
                 if tp2_hit: result_text = 'TRAILING (TP2+)'
                 
+                if pnl_pct < 0:
+                    consecutive_losses += 1
+                else:
+                    consecutive_losses = 0
+                
+                # Devre kesiciyi 4 saate (16 mum) indiriyoruz
+                if consecutive_losses >= 2:
+                    block_until_candle = i + 16
+                    consecutive_losses = 0
+                
                 trades.append({
                     'symbol': symbol, 'entry_time': entry_time, 'exit_time': current_time,
                     'entry_price': entry_price, 'exit_price': stop_loss,
-                    'pnl_pct': pnl_pct, 'result': result_text
+                    'pnl_pct': pnl_pct, 'result': result_text,
+                    'reasons': entry_reasons
                 })
                 in_position = False
                 last_exit_candle = i
@@ -235,7 +256,8 @@ def backtest_coin(symbol, df):
                     trades.append({
                         'symbol': symbol, 'entry_time': entry_time, 'exit_time': current_time,
                         'entry_price': entry_price, 'exit_price': tp1,
-                        'pnl_pct': partial_pnl, 'result': f'TP1 ({int(TP1_CLOSE_PCT*100)}%)'
+                        'pnl_pct': partial_pnl, 'result': f'TP1 ({int(TP1_CLOSE_PCT*100)}%)',
+                        'reasons': entry_reasons
                     })
                     position_remaining = 1.0 - TP1_CLOSE_PCT
                 
@@ -245,7 +267,8 @@ def backtest_coin(symbol, df):
                     trades.append({
                         'symbol': symbol, 'entry_time': entry_time, 'exit_time': current_time,
                         'entry_price': entry_price, 'exit_price': tp2,
-                        'pnl_pct': partial_pnl, 'result': f'TP2 ({int(TP2_CLOSE_PCT*100)}%)'
+                        'pnl_pct': partial_pnl, 'result': f'TP2 ({int(TP2_CLOSE_PCT*100)}%)',
+                        'reasons': entry_reasons
                     })
                     position_remaining = TP3_CLOSE_PCT
                 
@@ -254,7 +277,8 @@ def backtest_coin(symbol, df):
                     trades.append({
                         'symbol': symbol, 'entry_time': entry_time, 'exit_time': current_time,
                         'entry_price': entry_price, 'exit_price': tp3,
-                        'pnl_pct': partial_pnl, 'result': f'TP3 ({int(TP3_CLOSE_PCT*100)}%)'
+                        'pnl_pct': partial_pnl, 'result': f'TP3 ({int(TP3_CLOSE_PCT*100)}%)',
+                        'reasons': entry_reasons
                     })
                     in_position = False
                     last_exit_candle = i
@@ -265,10 +289,36 @@ def backtest_coin(symbol, df):
                 continue
             if trade_count >= MAX_TRADES_PER_COIN:
                 continue
+            if i < block_until_candle: # Devre kesici kontrolü
+                continue
             
             score, reasons = calculate_short_score(row)
             
+            # --- 🚀 AKILLI BOĞA KORUMASI (SMART BULL PROTECTION) ---
+            sma50 = float(row['sma50'])
+            rsi_prev = float(df.iloc[i-1]['rsi'])
+            rsi_curr = float(row['rsi'])
+            macd_confirmed = float(row['macd']) < float(row['macd_signal'])
+            
+            is_bull_zone = current_price > sma50
+            
+            if is_bull_zone:
+                # 1. Boğada Puan Barajını Yükselt (90)
+                final_threshold = SCORE_THRESHOLD + 10
+                
+                # 2. Boğada MACD onayı zorunlu değil ama varsa çok iyi
+                if macd_confirmed: score += 15
+                
+                # 3. Boğada RSI çok yüksekse yorulma bekle
+                if rsi_curr > 85 and rsi_curr >= rsi_prev:
+                    continue
+            else:
+                final_threshold = SCORE_THRESHOLD
+
             win_rate = 50
+            # ... (win rate hesaplama kodları aynı kalıyor)
+            # ----------------------------------------------------
+
             if score >= 100: win_rate += 20
             elif score >= 80: win_rate += 15
             elif score >= 70: win_rate += 10
@@ -277,10 +327,16 @@ def backtest_coin(symbol, df):
             if len(reasons) >= 5: win_rate += 10
             elif len(reasons) >= 4: win_rate += 5
             
-            if score >= SCORE_THRESHOLD and win_rate >= MIN_WIN_RATE:
+            if score >= final_threshold and win_rate >= MIN_WIN_RATE:
+                # --- 🚀 DİNAMİK ATR KONTROLÜ ---
+                atr_pct = (atr / current_price) * 100
+                if atr_pct > MAX_ATR_PERCENT or atr_pct < MIN_ATR_PERCENT:
+                    continue
+                
                 in_position = True
                 entry_price = current_price
                 entry_time = current_time
+                entry_reasons = reasons  # Sakla
                 trade_count += 1
                 
                 risk = atr * SL_ATR_MULT
@@ -300,7 +356,8 @@ def backtest_coin(symbol, df):
         trades.append({
             'symbol': symbol, 'entry_time': entry_time, 'exit_time': last_row['timestamp'],
             'entry_price': entry_price, 'exit_price': exit_price,
-            'pnl_pct': pnl_pct, 'result': 'DÖNEM SONU'
+            'pnl_pct': pnl_pct, 'result': 'DÖNEM SONU',
+            'reasons': entry_reasons
         })
     
     return trades
@@ -460,6 +517,35 @@ def run_backtest():
         print("\n💀 EN KÖTÜ 3 İŞLEM:")
         for t in sorted_trades[-3:]:
             print(f"   {t['symbol']}: {t['pnl_pct']:.2f}% ({t['result']})")
+
+    # 🔍 METRİK ANALİZİ
+    print("\n" + "=" * 70)
+    print("🔍 TEKNİK METRİK ANALİZİ (Hangi kriter zarara sokuyor?)")
+    print("=" * 70)
+    
+    reason_stats = {}
+    for t in all_trades:
+        if 'reasons' not in t: continue
+        is_loss = t['pnl_pct'] < 0
+        for r in t['reasons']:
+            # Puanı değil metrik adını al (örn: ADX+DI- (30) -> ADX+DI-)
+            metric = r.split('(')[0] if '(' in r else r
+            if metric not in reason_stats:
+                reason_stats[metric] = {'total': 0, 'wins': 0, 'losses': 0, 'pnl': 0}
+            
+            reason_stats[metric]['total'] += 1
+            if is_loss:
+                reason_stats[metric]['losses'] += 1
+            else:
+                reason_stats[metric]['wins'] += 1
+            reason_stats[metric]['pnl'] += t['pnl_pct']
+
+    # Tabloyu yazdır
+    print(f"{'Metrik':<20} | {'İşlem':<6} | {'Win Rate':<8} | {'Toplam PnL':<10}")
+    print("-" * 55)
+    for m, s in sorted(reason_stats.items(), key=lambda x: x[1]['pnl']):
+        wr = (s['wins'] / s['total'] * 100) if s['total'] > 0 else 0
+        print(f"{m:<20} | {s['total']:<6} | {wr:>7.1f}% | {s['pnl']:>+9.2f}%")
 
 if __name__ == "__main__":
     import time
