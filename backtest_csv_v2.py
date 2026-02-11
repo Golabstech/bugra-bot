@@ -20,7 +20,7 @@ POSITION_SIZE_PCT = 10
 LEVERAGE = 5
 MAKER_FEE = 0.0002
 TAKER_FEE = 0.0005
-STRATEGY_SIDE = 'SHORT'  # 'SHORT' veya 'LONG'
+STRATEGY_SIDE = 'LONG'  # 'SHORT' veya 'LONG'
 
 # 📅 TARİH ARALIĞI (Final Test: 90 Günlük Karma Senaryo)
 BACKTEST_START = datetime(2025, 11, 23, 0, 0, 0)
@@ -37,9 +37,9 @@ SINGLE_COIN = None  # Tüm coinler test edilsin
 SHOW_TRADE_DETAILS = False
 
 # ⚡ STRATEJİ FİLTRELERİ
-SCORE_THRESHOLD = 95
-MIN_WIN_RATE = 65
-COOLDOWN_CANDLES = 24
+SCORE_THRESHOLD = 90
+MIN_WIN_RATE = 75
+COOLDOWN_CANDLES = 8
 MAX_TRADES_PER_COIN = 20  # Dönem başına
 
 # 🎯 VOLATİLİTE FİLTRESİ
@@ -104,9 +104,7 @@ def calculate_indicators(df):
     df['mfi'] = ta.mfi(df['high'], df['low'], df['close'], df['volume'], length=14)
     df['atr'] = ta.atr(df['high'], df['low'], df['close'], length=14)
     
-    # NaN Temizliği (Önemli!)
-    df.dropna(inplace=True)
-    df.reset_index(drop=True, inplace=True)
+    df = df.ffill().fillna(0).infer_objects(copy=False)
     return df
 
 def calculate_scores_vectorized(df):
@@ -142,20 +140,17 @@ def calculate_scores_vectorized(df):
     reason_counts += mask_ema_bear
     
     # 🚀 SMA50 UZAKLIK (Overextension Bonus) - Daha Dengeli
-    valid_sma = (sma50 > 0)
-    dist_sma50 = np.full_like(sma50, 0)
-    np.divide((df['close'] - df['sma50']), df['sma50'] * 100, out=dist_sma50, where=valid_sma)
-    
-    mask_dist1 = (dist_sma50 > 4) & valid_sma
-    mask_dist2 = (dist_sma50 > 2) & (~mask_dist1) & valid_sma
+    dist_sma50 = (df['close'] - df['sma50']) / df['sma50'] * 100
+    mask_dist1 = (dist_sma50 > 4)
+    mask_dist2 = (dist_sma50 > 2) & (~mask_dist1)
     scores += mask_dist1 * 25
     scores += mask_dist2 * 10
     reason_counts += mask_dist2 | mask_dist1
     
     # RSI
-    mask_rsi = (rsi > 70)
+    mask_rsi = (rsi > 60)
     scores += (rsi > 80) * 30  # Aşırı şişme bonusu
-    scores += ((rsi > 70) & (rsi <= 80)) * 15
+    scores += ((rsi > 65) & (rsi <= 80)) * 20
     reason_counts += mask_rsi
     
     # MACD - Puanı düşür, ana tetikleyici olmasın
@@ -336,12 +331,12 @@ def backtest_coin(symbol, df):
     total_len = len(df)
     
     # Volatilite kontrolü (Numpy ile)
-    if total_len > 0:
-        atr_pct = (atr_arr[0] / close_arr[0]) * 100
+    if total_len > 50:
+        atr_pct = (atr_arr[50] / close_arr[50]) * 100
         if atr_pct > MAX_ATR_PERCENT or atr_pct < MIN_ATR_PERCENT:
             return []
 
-    for i in range(total_len):
+    for i in range(50, total_len):
         current_price = close_arr[i]
         
         if in_position:
@@ -475,10 +470,8 @@ def backtest_coin(symbol, df):
                 elif score >= 60: win_rate += 5
                 
                 num_reasons = rc_arr[i]
-                
-                # MINIMUM 3 NEDEN VE WIN RATE AYARI
-                if num_reasons < 3: continue
-                # Reason count artık win_rate bonusu vermiyor (Kaliteyi Score belirlesin)
+                if num_reasons >= 5: win_rate += 10
+                elif num_reasons >= 4: win_rate += 5
                 
                 if win_rate >= MIN_WIN_RATE:
                     atr = atr_arr[i]
