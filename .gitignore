@@ -1,5 +1,8 @@
 .tmp.driveupload
 __pycache__/
 *.pyc
-backtest_data/
 .env
+.vscode
+backtest_data/
+backtest_trades.csv
+backtest_positions.csv
