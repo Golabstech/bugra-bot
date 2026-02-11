@@ -1,0 +1,5 @@
+.tmp.driveupload
+__pycache__/
+*.pyc
+backtest_data/
+.env
