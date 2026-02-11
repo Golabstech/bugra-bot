@@ -1,5 +1,137 @@
 # 📋 CHANGELOG - Crypto Trading Bot
 
+## [v1.3.1] - 2026-02-11
+
+### 🧪 SOL Agresif Backtest Testi
+
+#### Yeni Dosya: sol_test.py
+- **SOL Coin Agresif Backtest:** $200 başlangıç, 10x kaldıraç, tüm bakiye ile test
+- **Tarih Aralığı:** 15 Ocak - 10 Şubat 2026
+- **Günde Min 5 İşlem Hedefi:** Akıllı giriş puanlaması ile zorunlu işlem açma
+- **Kademeli TP Sistemi:**
+  - TP1: 1:1 RR → %50 pozisyon kapat
+  - TP2: 1:1.8 RR → %30 pozisyon kapat
+  - TP3: 1:2.5 RR → %20 pozisyon kapat
+- **Sıkı SL:** ATR × 1.2 (~%1.8 fiyat hareketi)
+- **Max Kayıp Limiti:** Tek işlemde max %15 kayıp
+- **BTC Trend Takibi:** BTC yönüne göre LONG/SHORT tercih
+- **Trailing SL:** TP1 hit sonrası SL entry seviyesine çekilir
+- **Cooldown Sistemi:** Kayıptan sonra 1.5 saat, kazançtan sonra 30 dk bekleme
+- **4 Saat Timeout:** Max 16 mum (4 saat) pozisyon tutma
+
+---
+
+## [v1.3.0] - 2026-02-11
+
+### 🏆 Top Performer Coin Listesi ve Backtest Optimizasyonu
+
+#### swing_bot.py Güncellemeleri
+- **Top 20 Performer Listesi Eklendi:** 1-8 Şubat backtest sonuçlarına göre en başarılı 20 coin belirlendi
+  - ENSO (+233.6%), ASTER (+185.5%), WHITEWHALE (+183.6%), PIPPIN (+173.6%), GPS (+167.9%)...
+  - `USE_TOP_PERFORMERS = True` ile sadece kanıtlanmış coinler taranıyor
+- **BTC Trend Ağırlığı Optimize Edildi:** 
+  - BTC aynı yön bonus: +15p (önceden +20p)
+  - BTC ters yön cezası: -8p (önceden -15p, hafifletildi)
+- **Score Threshold Güncellendi:** 60 → 70 (daha kaliteli sinyaller)
+- **Strong Signal Threshold:** 75 (yüksek kaldıraç için)
+- **Funding Rate, Open Interest, Taker Ratio** piyasa verileri eklendi
+
+#### backtest_swing.py - Kapsamlı Backtest Motoru
+- **Çift Yönlü Backtest:** Hem LONG hem SHORT işlemler backteste dahil
+- **Farklı Score Eşikleri:** Long=65, Short=75 (asimetrik yaklaşım)
+- **Min Score Fark:** LONG-SHORT arası en az 20 puan fark zorunlu
+- **Optimize Edilmiş TP/SL:**
+  ```
+  SL: ATR × 1.5 (önceden 2.0, daha sıkı)
+  TP1: 1:1.2 (40% pozisyon kapatma)
+  TP2: 1:2.0 (35% pozisyon kapatma)
+  TP3: 1:3.0 (25% pozisyon kapatma)
+  ```
+- **24 Saat Timeout:** Zararda kapanan coinlerde 24 saat işlem yasağı
+- **BTC Trend Zorunluluğu:** EMA50/EMA200 dizilimine göre yön kilitleme
+  - BTC boğada → sadece LONG açılır
+  - BTC ayıda → sadece SHORT açılır
+- **Sharpe Ratio** hesaplaması eklendi
+- **Sinyal CSV Export:** Tüm sinyaller `swing_signals.csv`'ye kaydediliyor (778 sinyal)
+
+#### veri_cek.py Güncellemeleri
+- **Veri Aralığı Genişletildi:** 15 gün → 60 gün (2 ay)
+- **Coin Aralığı Genişletildi:** Rank 50-100 → Rank 1-100 (ilk 100 coin)
+- **Pagination Desteği:** 1000'lik batchler ile büyük veri çekme
+- **Hedef Tarih Aralığı:** 2026-01-12 - 2026-01-21
+
+#### Yeni Dosyalar
+- **canli_analiz.py** - Canlı piyasa analiz scripti
+  - Top performer coinleri anlık tarama
+  - BTC trend analizi + en iyi sinyal seçimi
+  - Konsol çıktısı ile quick-look analiz
+- **long_score_test.py** - Long skor test scripti
+  - Düşüş piyasasında long skor davranışı testi
+  - BTC EMA50/EMA200 trend filtresi doğrulama
+- **swing_signals.csv** - 778 backtest sinyali kaydı
+
+### 📊 Backtest Sonuçları (12-21 Ocak 2026)
+```
+📅 Test Periyodu: 12-21 Ocak 2026 (1 ay önceki hafta)
+💰 Başlangıç: $1,000
+⚡ Kaldıraç: 5x-10x (dinamik)
+📊 Pozisyon: %10
+```
+
+---
+
+## [v1.2.0] - 2026-02-10
+
+### 🔄 Trendle Uyumlu İşlem Zorunluluğu ve BTC Trend Algoritması
+- **BTC Trend Algoritması Geliştirildi:** Son 50 mumun EMA50 ve EMA200 dizilimine bakılarak boğa/ayı trendi belirleniyor.
+- **Trendle Ters Yönde İşlem Engellendi:** BTC boğa trendde sadece long, ayı trendde sadece short işlemler açılıyor. Ters yöndeki işlemler tamamen engellendi.
+- **Backtest ve canlıda trendle uyumlu, daha güvenli işlem açma.**
+- **Kod ve parametreler güncellendi.**
+
+### 🚀 Yeni: Swing Bot (Çift Yönlü)
+
+#### swing_bot.py - BTC Takipli Çift Yönlü Trading
+- **BTC Trend Analizi**: Önce BTC yönü belirleniyor (BULLISH/BEARISH/NEUTRAL)
+- **Çift Yönlü Sinyal**: Hem LONG hem SHORT sinyalleri
+- **Dinamik Kaldıraç**: 5x-10x (sinyal gücüne göre)
+- **Pozisyon Süresi**: 1-4 saat (daha stabil)
+- **Multi-Timeframe**: 15m, 1h, 4h confluence
+
+#### Strateji Parametreleri
+```
+Min Score: 60
+Min Win Rate: 65%
+BTC Aynı Yön Bonus: +20p
+BTC Ters Yön Ceza: -15p
+
+Kaldıraç:
+  • Score≥90 + WR≥75%: 10x
+  • Score≥80 + WR≥70%: 8x
+  • Score≥70 + WR≥65%: 7x
+  • Score≥60: 6x
+
+Stop Loss: ATR × 2.0
+TP1: 1:1.5 (30%)
+TP2: 1:2.5 (30%)
+TP3: 1:4.0 (40%)
+```
+
+#### LONG Sinyal Kriterleri
+- Golden Cross (EMA9 > EMA21)
+- RSI < 30 (aşırı satım)
+- MACD Bullish Cross
+- BB Alt Bant Bounce
+- StochRSI < 20
+
+#### SHORT Sinyal Kriterleri  
+- Death Cross (EMA9 < EMA21)
+- RSI > 80 (aşırı alım)
+- MACD Bearish Cross
+- BB Üst Bant Reddi
+- StochRSI > 85
+
+---
+
 ## [v1.1.0] - 2026-02-10
 
 ### 🚀 Yeni: Swing Bot (Çift Yönlü)
@@ -191,10 +323,14 @@ murat/
 ---
 
 ## Sonraki Adımlar (Planlar)
-- [ ] İlk 100 coin için 1 aylık veri çekimi (API sorunları çözülmeli)
-- [ ] LONG sinyal stratejisi ekleme
-- [ ] Canlı trading modu
+- [x] İlk 100 coin için 2 aylık veri çekimi (veri_cek.py güncellendi)
+- [x] LONG sinyal stratejisi ekleme (swing_bot.py çift yönlü)
+- [x] Top performer coin listesi oluşturma
+- [x] Canlı analiz scripti (canli_analiz.py)
+- [ ] Canlı otomatik trading modu (API entegrasyonu)
 - [ ] Web dashboard
+- [ ] Risk yönetimi modülü (max drawdown limiti, günlük kayıp limiti)
+- [ ] Backtest sonuçlarını otomatik Telegram'a gönderme
 
 ---
-*Son güncelleme: 2026-02-09*
+*Son güncelleme: 2026-02-11*

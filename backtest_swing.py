@@ -14,9 +14,9 @@ DATA_FOLDER = "backtest_data"
 INITIAL_BALANCE = 1000
 POSITION_SIZE_PCT = 10
 
-# 📅 TARİH ARALIĞI - 1 ay önce 1 hafta (10-16 Ocak 2026)
-BACKTEST_START = datetime(2026, 1, 12, 0, 0, 0)
-BACKTEST_END = datetime(2026, 1, 21, 23, 59, 59)
+# 📅 TARİH ARALIĞI - Geçen hafta (3-9 Şubat 2026)
+BACKTEST_START = datetime(2026, 2, 3, 0, 0, 0)
+BACKTEST_END = datetime(2026, 2, 9, 23, 59, 59)
 
 # 🎯 TEK COİN TEST (None = tüm coinler)
 SINGLE_COIN = None  # "BTC/USDT:USDT"
