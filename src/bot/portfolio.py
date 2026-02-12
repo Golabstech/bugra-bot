@@ -78,9 +78,15 @@ class PortfolioManager:
         """Yeni pozisyon açılabilir mi? → (ok, reason)"""
         self._reset_daily_if_needed()
 
-        # Zaten açık mı?
+        # Zaten hafızada açık mı?
         if symbol in self.positions:
-            return False, f"{symbol} zaten açık"
+            return False, f"{symbol} zaten açık (hafızada)"
+
+        # Restart durumu: Borsada zaten açık mı?
+        exchange_positions = self.exchange.get_positions()
+        active_symbols = [p['symbol'] for p in exchange_positions]
+        if symbol in active_symbols:
+            return False, f"{symbol} zaten açık (borsada)"
 
         # Max eş zamanlı pozisyon
         if len(self.positions) >= MAX_CONCURRENT_POSITIONS:

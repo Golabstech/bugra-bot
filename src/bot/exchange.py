@@ -23,8 +23,16 @@ class ExchangeClient:
         })
 
         if EXCHANGE_SANDBOX:
-            self.exchange.set_sandbox_mode(True)
-            logger.info("🧪 PAPER TRADING modu aktif (Binance Testnet)")
+            # CCXT v4.5.6+ Demo Trading (Mock Trading) yapılandırması
+            # Sandbox mode (True) eski testnet'e gittiği için bunu kullanmıyoruz.
+            # Bunun yerine demo trading'i aktif edip URL'leri yönlendiriyoruz.
+            if hasattr(self.exchange, 'enable_demo_trading'):
+                self.exchange.enable_demo_trading(True)
+            
+            self.exchange.urls['api']['fapiPublic'] = 'https://demo-fapi.binance.com/fapi/v1'
+            self.exchange.urls['api']['fapiPrivate'] = 'https://demo-fapi.binance.com/fapi/v1'
+            
+            logger.info("🧪 DEMO TRADING (Mock) modu aktif")
         else:
             logger.warning("⚠️ CANLI TRADING modu aktif!")
 
@@ -39,7 +47,8 @@ class ExchangeClient:
                 'used': float(usdt.get('used', 0)),
             }
         except Exception as e:
-            logger.error(f"❌ Bakiye alınamadı: {e}")
+            # Başlangıçta bakiye alınamazsa çok gürültü yapmasın (retry mekanizması main'de var)
+            logger.debug(f"Bakiye alınamadı: {e}")
             return {'total': 0, 'free': 0, 'used': 0}
 
     def get_positions(self) -> list:
@@ -109,7 +118,10 @@ class ExchangeClient:
             logger.info(f"✅ Pozisyon kapatıldı: {symbol} | {amount}")
             return order
         except Exception as e:
-            logger.error(f"❌ Pozisyon kapatılamadı {symbol}: {e}")
+            if "ReduceOnly Order is rejected" in str(e):
+                logger.info(f"ℹ️ {symbol} pozisyonu zaten borsa tarafında (SL/TP) kapanmış.")
+            else:
+                logger.error(f"❌ Pozisyon kapatılamadı {symbol}: {e}")
             return None
 
     def set_stop_loss(self, symbol: str, side: str, stop_price: float, amount: float) -> dict | None:
@@ -165,12 +177,17 @@ class ExchangeClient:
             return []
 
     def fetch_ticker(self, symbol: str) -> dict | None:
-        """Anlık fiyat bilgisi"""
-        try:
-            return self.exchange.fetch_ticker(symbol)
-        except Exception as e:
-            logger.error(f"❌ Ticker alınamadı {symbol}: {e}")
-            return None
+        """Anlık fiyat bilgisi (Retry ile)"""
+        for i in range(3):
+            try:
+                return self.exchange.fetch_ticker(symbol)
+            except Exception as e:
+                if i < 2:
+                    import time
+                    time.sleep(1)
+                    continue
+                logger.error(f"❌ Ticker alınamadı {symbol}: {e}")
+        return None
 
     def fetch_top_futures_symbols(self, count: int = 100) -> list[str]:
         """Hacme göre ilk N futures sembolünü getir"""

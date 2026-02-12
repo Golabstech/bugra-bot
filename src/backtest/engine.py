@@ -23,9 +23,14 @@ MAKER_FEE = 0.0002
 TAKER_FEE = 0.0005
 STRATEGY_SIDE = 'SHORT'  # 'SHORT' veya 'LONG'
 
-# 📅 TARİH ARALIĞI (Final Test: 90 Günlük Karma Senaryo)
-BACKTEST_START = datetime(2025, 8, 24, 0, 0, 0)
-BACKTEST_END = datetime(2025, 9, 24, 12, 0, 0)
+# 📅 TARİH ARALIĞI (Son 3-4 Aylık Veriler)
+BACKTEST_START = datetime(2024, 1, 1, 0, 0, 0)
+BACKTEST_END = datetime(2026, 2, 12, 14, 0, 0)
+
+# 🧪 DARWINIST (SIGNAL DECAY) AYARLARI
+SIGNAL_DECAY_EXIT = True
+SIGNAL_DECAY_THRESHOLD = 25    # Skor bu değerin altına düşerse tahliye et (35 -> 25: Daha Cesur)
+SIGNAL_DECAY_GRACE_PERIOD = 4  # İlk 4 mumda tahliye yapma (gürültü koruması)
 
 # 🎲 MONTE CARLO AYARLARI
 RUN_MONTE_CARLO = True  # Doğrulama için True yapın
@@ -35,7 +40,7 @@ MONTE_CARLO_SIMULATIONS = 5000
 SINGLE_COIN = None  # Tüm coinler test edilsin
 
 # 📋 İŞLEM DETAYLARI GÖSTER (Kapsamlı testte False olması daha iyi)
-SHOW_TRADE_DETAILS = False
+SHOW_TRADE_DETAILS = True
 SAVE_CSV = True  # İşlemleri CSV dosyasına kaydet
 BACKTEST_RESULTS_FILE = os.path.join(_PROJECT_ROOT, "data", "backtest_trades.csv")
 
@@ -445,6 +450,21 @@ def backtest_coin(symbol, df):
                     in_position = False
                     last_exit_candle = i
                     continue
+                
+            # Signal Decay Exit (Darwinist Çıkış)
+            if SIGNAL_DECAY_EXIT and (i - entry_candle) >= SIGNAL_DECAY_GRACE_PERIOD:
+                current_score = score_arr[i]
+                if current_score < SIGNAL_DECAY_THRESHOLD:
+                    pnl_decay = ((entry_price - current_price) / entry_price) if STRATEGY_SIDE == 'SHORT' else ((current_price - entry_price) / entry_price)
+                    trades.append({
+                        'symbol': symbol, 'entry_time': entry_time, 'exit_time': timestamps[i],
+                        'entry_price': entry_price, 'exit_price': current_price,
+                        'pnl_pct': pnl_decay * 100 * position_remaining,
+                        'result': 'SIGNAL DECAY (Darwin)', 'reasons': entry_reasons
+                    })
+                    in_position = False
+                    last_exit_candle = i
+                    continue
         else:
             if i - last_exit_candle < COOLDOWN_CANDLES: continue
             if trade_count >= MAX_TRADES_PER_COIN: continue
@@ -498,6 +518,7 @@ def backtest_coin(symbol, df):
                 
                 stop_loss = original_stop
                 tp1_hit = tp2_hit = False
+                entry_candle = i
     
     # Açık pozisyonu kapat (Dönem Sonu)
     if in_position:
@@ -697,15 +718,30 @@ def _process_coin(args):
     try:
         df = pd.read_csv(filename)
         df['timestamp'] = pd.to_datetime(df['timestamp'])
-        df = df[(df['timestamp'] >= BACKTEST_START) & (df['timestamp'] <= BACKTEST_END)]
+        # Tarih filtresi
+        mask = (df['timestamp'] >= BACKTEST_START) & (df['timestamp'] <= BACKTEST_END)
+        df = df.loc[mask].copy()
         
         if len(df) < 50:
+            # print(f"DEBUG: {symbol} yetersiz veri: {len(df)}")
             return symbol, []
         
         df = calculate_indicators(df)
+        
+        # DEBUG: Skorları kontrol et
+        if STRATEGY_SIDE == 'SHORT':
+            scores, reasons = calculate_scores_vectorized(df)
+        else:
+            scores, reasons = calculate_long_scores_vectorized(df)
+            
+        max_score = scores.max() if len(scores) > 0 else 0
+        if max_score >= 0:
+             print(f"🔍 DEBUG {symbol}: Veri={len(df)} | MaxSkor={max_score} | MaxNeden={reasons.max()}")
+
         trades = backtest_coin(symbol, df)
         return symbol, trades
     except Exception as e:
+        print(f"❌ HATA {symbol}: {e}")
         return symbol, []
 
 def run_monte_carlo_analysis(all_trades):
@@ -791,11 +827,11 @@ def run_monte_carlo_analysis(all_trades):
 # 🚀 ANA BACKTEST
 # ==========================================
 def run_backtest():
-    """CSV'lerden backtest çalıştır (PARALEL)"""
-    num_workers = cpu_count()
+    """CSV'lerden backtest çalıştır (SERİ MOD - DEBUG)"""
+    num_workers = 1 # cpu_count()
     
     print("=" * 70)
-    print("🚀 HIZLI BACKTEST (CSV'DEN) - PARALEL MOD")
+    print("🚀 HIZLI BACKTEST (CSV'DEN) - SERİ MOD (DEBUG)")
     print("=" * 70)
     print(f"📅 Tarih Aralığı: {BACKTEST_START.strftime('%Y-%m-%d')} - {BACKTEST_END.strftime('%Y-%m-%d')}")
     print(f"💰 Başlangıç: ${INITIAL_BALANCE} | Kaldıraç: {LEVERAGE}x")
@@ -832,21 +868,25 @@ def run_backtest():
     all_trades = []
     analyzed = 0
     
-    # PARALEL İŞLEM
-    with ProcessPoolExecutor(max_workers=num_workers) as executor:
-        futures = {executor.submit(_process_coin, task): task[0] for task in tasks}
+    all_trades = []
+    analyzed = 0
+    
+    # SERİ İŞLEM (DEBUG İÇİN)
+    for index, row in coin_list.iterrows():
+        # CSV'deki yol "backtest_data/XXX.csv" şeklinde. Biz sadece dosya ismini alıp DATA_FOLDER ile birleştirelim.
+        filename = os.path.basename(row['file'])
+        full_path = os.path.join(DATA_FOLDER, filename)
         
-        for future in as_completed(futures):
-            symbol = futures[future]
-            analyzed += 1
-            print(f"\r⚡ [{analyzed}/{total_coins}] {symbol} tamamlandı...", end="        ")
-            
-            try:
-                sym, trades = future.result()
-                if trades:
-                    all_trades.extend(trades)
-            except Exception as e:
-                print(f"\n⚠️ {symbol} hata: {e}")
+        task = (row['symbol'], full_path)
+        res_symbol, trades = _process_coin(task)
+        analyzed += 1
+        
+        # print(f"\r⚡ [{analyzed}/{total_coins}] {res_symbol} bitti...", end="")
+        
+        if trades:
+            all_trades.extend(trades)
+
+    print(f"\n\n✅ {analyzed} coin analiz edildi (Seri Mod)")
     
     print(f"\n\n✅ {analyzed} coin analiz edildi (Paralel)")
 

@@ -7,7 +7,8 @@ from datetime import datetime, timedelta
 # ==========================================
 # ⚙️ AYARLAR
 # ==========================================
-DATA_FOLDER = "backtest_data"
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+DATA_FOLDER = os.path.join(_PROJECT_ROOT, "data", "backtest_data")
 DAYS_TO_FETCH = 240         # 8 ay (Geriye dönük)
 START_RANK = 1              
 END_RANK = 100
