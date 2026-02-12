@@ -1,10 +1,46 @@
 # 📋 CHANGELOG - Crypto Trading Bot
 
+## [v1.3.0] - 2026-02-12
+
+### 🚀 Yeni Özellikler
+
+#### 💰 Dinamik Marjin Portföy Simülatörü (PortfolioSimulator)
+
+- **Dinamik Sermaye Aktarımı:** TP1/TP2 sonrası serbest kalan marjin + kâr otomatik olarak cüzdana geri aktarılıyor ve yeni pozisyonlarda kullanılabiliyor.
+- **Kronolojik Birleşik Simülasyon:** Tüm coinler artık tek bir cüzdan üzerinden kronolojik sırada simüle ediliyor (gerçek trading koşullarına yakın).
+- **Olay Tabanlı Mimari:** OPEN/CLOSE event timeline ile modüler ve genişletilebilir yapı.
+- **Portföy Drawdown İzleme:** Gerçek portföy değeri üzerinden max drawdown hesaplanıyor (sadece bakiye değil, açık pozisyonların marjinini de dahil ediyor).
+
+#### 🛡️ Strateji İyileştirmeleri
+
+- **Coin Bazlı Dinamik Blacklist:** Art arda 3+ kayıp veren coin'ler 32 mum (~8 saat) boyunca otomatik olarak devre dışı bırakılıyor.
+- **Yapay Win Rate Kaldırıldı:** Eski sabit `win_rate` hesabı yerine doğrudan `MIN_REASONS` (minimum 4 farklı teknik sinyal) kontrolü ile daha temiz filtreleme.
+- **Blacklist Bug Fix:** Önceki sürümde `consecutive_losses` sayacı 2'de sıfırlandığı için 3+ blacklist hiçbir zaman tetiklenmiyordu — düzeltildi.
+
+### 🧹 Teknik Temizlik
+
+- **Ölü Kod Temizliği:** `return trades` sonrası erişilemeyen duplikat DÖNEM SONU bloğu silindi (14 satır).
+- **Excel Uyumluluğu:** CSV çıktılarında ondalık ayracı virgüle çevrilerek Türkçe Excel ile uyum sağlandı.
+- **Kronolojik CSV:** `backtest_positions.csv` artık entry_time'a göre sıralı.
+
+### 📊 Backtest Sonuçları (1 Aylık Test: 24 Ağu - 24 Eyl 2025)
+
+| Metrik | Önceki (v1.2) | Yeni (v1.3) | Değişim |
+|--------|---------------|-------------|---------|
+| Win Rate | %54.8 | %55.2 | ✅ +0.4% |
+| Final Bakiye | $2,531 | ~$2,870 | ✅ +$339 |
+| Monte Carlo Medyan | $2,527 | $2,698 | ✅ +$171 |
+| Max Drawdown (MC) | %46.8 | %44.2 | ✅ -2.6% |
+| İflas Riski | %0.00 | %0.00 | ✅ Sabit |
+
+---
+
 ## [v1.2.0] - 2026-02-11
 
 ### 🚀 Yeni Özellikler
 
 #### Yüksek Performanslı Backtest Motoru (X-Engine)
+
 - **Paralel İşlem (Multiprocessing):** CPU çekirdeklernin (28 çekirdek) tamamını kullanarak backtest süresini %90 oranında azalttı (30 sn -> 3.5 sn).
 - **Vektörize Hesaplama (Numpy):** Pandas döngüleri yerine Numpy array operasyonları ile mumu işleme hızı "ışık hızına" çıkarıldı.
 - **Monte Carlo Doğrulama:** Stratejinin başarısının şans mı yoksa matematiksel bir güç mü olduğunu test eden simülasyon motoru eklendi:
@@ -12,6 +48,7 @@
   - **İflas Riski (Risk of Ruin) Analizi:** Stratejinin sermayeyi sıfırlama ihtimali hesaplandı.
 
 #### Strateji Optimizasyonu & Risk Yönetimi (v5)
+
 - **Smart Breakeven (BE):** TP1 gerçekleştikten sonra stop loss'un anında giriş fiyatına çekilmesi sağlandı (Kârdaki işlemin zarara dönme riskine son).
 - **Overextension Filter (SMA50 Distance):** Fiyatın SMA50'den %3-4 yukarıda olduğu "aşırı şişmiş" durumlar için +30 puanlık bonus eklenerek zirve yakalama kabiliyeti artırıldı.
 - **TP1 Dağılımı:** TP1 kapatma oranı %40 olarak optimize edildi (BE ile birleşince risk/kazanç oranı dengelendi).
@@ -20,6 +57,7 @@
 ### 📊 Backtest & Validasyon Sonuçları (v5)
 
 #### 90 Günlük Stabilite Testi (Kasım 2025 - Şubat 2026)
+
 | Metrik | Değer |
 |--------|-------|
 | Toplam İşlem | 1595 |
@@ -28,6 +66,7 @@
 | **Final Kâr** | **+%290 ($3,900)** |
 
 #### 🎲 Monte Carlo Risk Analizi (5000 Simülasyon)
+
 | Metrik | Değer |
 |--------|-------|
 | Ortalama Max Drawdown | %25.7 |
@@ -41,6 +80,7 @@
 ### 🚀 Yeni Özellikler
 
 #### Backtest & Strateji Optimizasyonu (Smart Bull Protection)
+
 - **backtest_csv.py** - "Akıllı Boğa Koruması" entegre edildi:
   - **Smart Bull Filter:** Fiyat SMA 50 üzerindeyken daha seçici (Score +10) ve RSI eğimi (yorulma belirtisi) kontrolü.
   - **MACD Bonus:** Boğa bölgesinde sadece MACD onayı varsa ek puan verilerek trend tersi işlemler filtrelendi.
@@ -49,12 +89,14 @@
   - **Metrik Analiz Raporu:** Hangi indikatörün (RSI, MACD, BB vb.) toplam kâr/zarara ne kadar etki ettiğini gösteren detaylı tablo eklendi.
 
 #### Veri Yönetimi & Ölçeklendirme
+
 - **veri_cek.py** - Geliştirilmiş Geçmiş Veri Çekici:
   - **90 Günlük Arşiv:** Veri çekme kapasitesi 30 günden 90 güne çıkarıldı.
   - **Paging Mekanizması:** Bybit'ten parça parça (1000'er mum) veri çekerek geçmişe dönük sınırsız veri indirme imkanı sağlandı.
   - **İlk 100 Coin:** Hacme göre ilk 100 coin için tam kapsamlı veri seti oluşturuldu.
 
 ### 📈 Strateji İyileştirmeleri (v3 → v4)
+
 | Özellik | Eski (v3) | Yeni (v4) | Amaç |
 |-------|-------|-------|-------|
 | MACD İndeksi | Yanlış (Histogram) | Doğru (Signal Line) | Sinyal doğruluğunu artırmak |
@@ -66,6 +108,7 @@
 ### 📊 Backtest Sonuçları (Güncel)
 
 #### 90 Günlük Karma Test (Kasım 2025 - Şubat 2026)
+
 | Metrik | Değer |
 |--------|-------|
 | Toplam İşlem | 2485 |
@@ -75,10 +118,12 @@
 | **Toplam Kar** | **+$2,572 (+%257)** |
 
 #### ⚡ Pump Dönemi Direnci (BTC 63k -> 71k Testi)
+
 - **Korumasız Strateji:** -%29.74 zarar
 - **v4 Korumalı Strateji:** **-%8.99 zarar** (Kalkanlar sayesinde ayakta kalındı)
 
 ### � Çözülen Sorunlar
+
 - **MACD Bug:** Signal Line yerine Histogram'ın okunması hatası giderildi.
 - **Unicode Error:** Terminal çıktılarını bozan emoji/karakter kodlama sorunları optimize edildi.
 - **Paging Issue:** Bybit API'den sadece son 1000 mumu çekebilme sınırı paging ile aşıldı.
@@ -90,15 +135,18 @@
 ### 🚀 Yeni Özellikler
 
 #### Trading Bot Sistemleri
+
 - **short_bot.py** - SHORT sinyal trading botu oluşturuldu
 - **ultra_short_bot.py** - Geliştirilmiş ultra short bot
 - **scan_50_100.py** - Coin tarama scripti
 
 #### Backtest Sistemleri
+
 - **backtest_csv.py** - Hızlı CSV tabanlı backtest (v3)
 - **veri_cek.py** - OHLCV veri çekme scripti
 
 ### 📁 Proje Yapısı (v1.1)
+
 ```
 murat/
 ├── backtest_csv.py      # Akıllı Boğa Korumalı Backtest ⭐
@@ -110,6 +158,7 @@ murat/
 ---
 
 ## Sonraki Adımlar (Planlar)
+
 - [x] İlk 100 coin için 90 günlük veri çekimi
 - [ ] LONG sinyal stratejisi ekleme ve SHORT ile hibrit çalıştırma
 - [ ] Kalıcı veri tabanı (SQLite/PostgreSQL) entegrasyonu

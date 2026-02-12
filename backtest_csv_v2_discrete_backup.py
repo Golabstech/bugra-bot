@@ -34,15 +34,17 @@ MONTE_CARLO_SIMULATIONS = 5000
 SINGLE_COIN = None  # Tüm coinler test edilsin
 
 # 📋 İŞLEM DETAYLARI GÖSTER (Kapsamlı testte False olması daha iyi)
-SHOW_TRADE_DETAILS = True
+SHOW_TRADE_DETAILS = False
 SAVE_CSV = True  # İşlemleri CSV dosyasına kaydet
 BACKTEST_RESULTS_FILE = "backtest_trades.csv"
 
 # ⚡ STRATEJİ FİLTRELERİ
 SCORE_THRESHOLD = 90
-MIN_WIN_RATE = 75
+MIN_REASONS = 4            # Minimum farklı teknik sinyal sayısı
 COOLDOWN_CANDLES = 8
-MAX_TRADES_PER_COIN = 20  # Dönem başına
+MAX_TRADES_PER_COIN = 20   # Dönem başına
+COIN_BLACKLIST_AFTER = 3   # Art arda bu kadar kayıptan sonra coin'i devre dışı bırak
+COIN_BLACKLIST_CANDLES = 32 # Devre dışı kalma süresi (mum sayısı)
 
 # 🎯 VOLATİLİTE FİLTRESİ
 MAX_ATR_PERCENT = 4.5   # Biraz daha esnek volatilite
@@ -329,6 +331,7 @@ def backtest_coin(symbol, df):
     trade_count = 0
     consecutive_losses = 0
     block_until_candle = 0
+    coin_blacklist_until = 0  # Coin bazlı dinamik blacklist
     
     total_len = len(df)
     
@@ -385,9 +388,12 @@ def backtest_coin(symbol, df):
                 if pnl_pct < 0: consecutive_losses += 1
                 else: consecutive_losses = 0
                 
-                if consecutive_losses >= 2:
-                    block_until_candle = i + 16
+                # Coin bazlı dinamik blacklist (ÖNCE büyük kontrol)
+                if consecutive_losses >= COIN_BLACKLIST_AFTER:
+                    coin_blacklist_until = i + COIN_BLACKLIST_CANDLES
                     consecutive_losses = 0
+                elif consecutive_losses >= 2:
+                    block_until_candle = i + 16
                 
                 trades.append({
                     'symbol': symbol, 'entry_time': entry_time, 'exit_time': timestamps[i],
@@ -442,6 +448,7 @@ def backtest_coin(symbol, df):
             if i - last_exit_candle < COOLDOWN_CANDLES: continue
             if trade_count >= MAX_TRADES_PER_COIN: continue
             if i < block_until_candle: continue
+            if i < coin_blacklist_until: continue  # Coin bazlı blacklist
             
             score = score_arr[i]
             
@@ -464,41 +471,34 @@ def backtest_coin(symbol, df):
                 final_threshold = SCORE_THRESHOLD
 
             if score >= final_threshold:
-                # Orijinal win_rate mantığını birebir uygula
-                win_rate = 50
-                if score >= 100: win_rate += 20
-                elif score >= 80: win_rate += 15
-                elif score >= 70: win_rate += 10
-                elif score >= 60: win_rate += 5
-                
+                # Minimum neden sayısı kontrolü (yapay win_rate yerine gerçek sinyal kalitesi)
                 num_reasons = rc_arr[i]
-                if num_reasons >= 5: win_rate += 10
-                elif num_reasons >= 4: win_rate += 5
+                if num_reasons < MIN_REASONS: continue
                 
-                if win_rate >= MIN_WIN_RATE:
-                    atr = atr_arr[i]
-                    atr_pct = (atr / current_price) * 100
-                    if atr_pct > MAX_ATR_PERCENT or atr_pct < MIN_ATR_PERCENT: continue
-                    
-                    in_position = True
-                    entry_price = current_price
-                    entry_time = timestamps[i]
-                    
-                    # Detaylı nedenleri sadece entry anında getir (Hız kaybı olmaz)
-                    entry_reasons = get_detailed_reasons(df.iloc[i])
-                    
-                    trade_count += 1
-                    risk = atr * SL_ATR_MULT
-                    if STRATEGY_SIDE == 'SHORT':
-                        original_stop = entry_price + risk
-                        tp1, tp2, tp3 = entry_price-(risk*TP1_RR), entry_price-(risk*TP2_RR), entry_price-(risk*TP3_RR)
-                    else:
-                        original_stop = entry_price - risk
-                        tp1, tp2, tp3 = entry_price+(risk*TP1_RR), entry_price+(risk*TP2_RR), entry_price+(risk*TP3_RR)
-                    
-                    stop_loss = original_stop
-                    tp1_hit = tp2_hit = False
+                atr = atr_arr[i]
+                atr_pct = (atr / current_price) * 100
+                if atr_pct > MAX_ATR_PERCENT or atr_pct < MIN_ATR_PERCENT: continue
+                
+                in_position = True
+                entry_price = current_price
+                entry_time = timestamps[i]
+                
+                # Detaylı nedenleri sadece entry anında getir (Hız kaybı olmaz)
+                entry_reasons = get_detailed_reasons(df.iloc[i])
+                
+                trade_count += 1
+                risk = atr * SL_ATR_MULT
+                if STRATEGY_SIDE == 'SHORT':
+                    original_stop = entry_price + risk
+                    tp1, tp2, tp3 = entry_price-(risk*TP1_RR), entry_price-(risk*TP2_RR), entry_price-(risk*TP3_RR)
+                else:
+                    original_stop = entry_price - risk
+                    tp1, tp2, tp3 = entry_price+(risk*TP1_RR), entry_price+(risk*TP2_RR), entry_price+(risk*TP3_RR)
+                
+                stop_loss = original_stop
+                tp1_hit = tp2_hit = False
     
+    # Açık pozisyonu kapat (Dönem Sonu)
     if in_position:
         exit_p = close_arr[-1]
         if STRATEGY_SIDE == 'SHORT':
@@ -510,20 +510,178 @@ def backtest_coin(symbol, df):
                        'pnl_pct': pnl_final,
                        'result': 'DÖNEM SONU', 'reasons': entry_reasons})
     return trades
+
+# ==========================================
+# 💰 DİNAMİK MARJİN PORTFÖY SİMÜLATÖRÜ
+# ==========================================
+class PortfolioSimulator:
+    """Dinamik marjin aktarımlı portföy simülatörü.
     
-    # Açık pozisyonu kapat
-    if in_position:
-        last_row = df.iloc[-1]
-        exit_price = float(last_row['close'])
-        pnl_pct = ((entry_price - exit_price) / entry_price) * 100 * position_remaining
-        trades.append({
-            'symbol': symbol, 'entry_time': entry_time, 'exit_time': last_row['timestamp'],
-            'entry_price': entry_price, 'exit_price': exit_price,
-            'pnl_pct': pnl_pct, 'result': 'DÖNEM SONU',
-            'reasons': entry_reasons
-        })
+    TP1/TP2 sonrası serbest kalan sermayeyi yeni fırsatlarda kullanır.
+    Tüm coinler kronolojik olarak birleştirilip tek cüzdan üzerinden simüle edilir.
+    """
     
-    return trades
+    def __init__(self, initial_balance, position_size_pct, leverage, maker_fee, taker_fee):
+        self.initial_balance = initial_balance
+        self.position_size_pct = position_size_pct
+        self.leverage = leverage
+        self.fee_rate = maker_fee + taker_fee
+    
+    def _get_close_fraction(self, result, remaining_pct):
+        """İşlem sonucundan kapatılan pozisyon oranını çıkar"""
+        if 'TP1' in result and '(' in result:
+            return TP1_CLOSE_PCT
+        elif 'TP2' in result and '(' in result:
+            return TP2_CLOSE_PCT
+        elif 'TP3' in result and '(' in result:
+            return TP3_CLOSE_PCT
+        else:  # STOP LOSS, TRAILING, DÖNEM SONU → kalan kısmı kapat
+            return remaining_pct
+    
+    def simulate(self, all_trades):
+        """Tüm işlemleri kronolojik sırada dinamik marjinle simüle et"""
+        from collections import defaultdict
+        
+        # 1. Pozisyonları grupla (symbol + entry_time)
+        pos_trades = defaultdict(list)
+        for t in all_trades:
+            pos_id = f"{t['symbol']}_{t['entry_time']}"
+            pos_trades[pos_id].append(t)
+        
+        # 2. Olay zaman çizelgesi oluştur
+        events = []
+        for pos_id, trades in pos_trades.items():
+            trades.sort(key=lambda x: x['exit_time'])
+            
+            # Pozisyon açılış olayı
+            events.append({
+                'time': trades[0]['entry_time'],
+                'type': 'OPEN',
+                'pos_id': pos_id,
+                'symbol': trades[0]['symbol'],
+            })
+            
+            # Kapanış olayları (her TP/SL segmenti)
+            for t in trades:
+                events.append({
+                    'time': t['exit_time'],
+                    'type': 'CLOSE',
+                    'pos_id': pos_id,
+                    'trade': t,
+                })
+        
+        # Kronolojik sırala: kapanışlar önce (sermaye serbest kalsın), sonra açılışlar
+        events.sort(key=lambda e: (e['time'], 0 if e['type'] == 'CLOSE' else 1))
+        
+        # 3. Simülasyon
+        available = self.initial_balance
+        active = {}       # pos_id -> {margin, remaining_pct, entry_balance}
+        skipped = set()   # Bakiye yetersiz → atlanan pozisyonlar
+        
+        executed_trades = []
+        aggregated = {}
+        peak_balance = self.initial_balance
+        max_drawdown = 0
+        total_margin_recycled = 0  # TP'lerden geri dönen sermaye
+        
+        for ev in events:
+            if ev['type'] == 'OPEN':
+                pos_id = ev['pos_id']
+                margin = available * (self.position_size_pct / 100)
+                
+                if margin < 1:  # Minimum marjin kontrolü
+                    skipped.add(pos_id)
+                    continue
+                
+                available -= margin
+                active[pos_id] = {
+                    'margin': margin,
+                    'remaining_pct': 1.0,
+                    'entry_balance': available + margin,  # Pozisyon öncesi toplam bakiye
+                }
+                
+            elif ev['type'] == 'CLOSE':
+                pos_id = ev['pos_id']
+                if pos_id in skipped or pos_id not in active:
+                    continue
+                
+                trade = ev['trade']
+                pos = active[pos_id]
+                
+                # Kapatılan oran
+                close_frac = self._get_close_fraction(trade['result'], pos['remaining_pct'])
+                freed_margin = pos['margin'] * close_frac
+                
+                # Ham PnL hesapla (trade['pnl_pct'] zaten close_frac içeriyor)
+                raw_pnl_pct = trade['pnl_pct'] / close_frac if close_frac > 0 else 0
+                
+                # Kâr/Zarar hesaplama
+                profit = freed_margin * self.leverage * (raw_pnl_pct / 100)
+                fee = freed_margin * self.leverage * self.fee_rate
+                net_pnl = profit - fee
+                
+                # Serbest kalan sermayeyi cüzdana geri yükle
+                returned = freed_margin + net_pnl
+                if returned < 0:
+                    returned = 0  # Likidasyon koruması
+                
+                available += returned
+                pos['remaining_pct'] -= close_frac
+                
+                # TP'den geri dönen sermayeyi izle
+                if net_pnl > 0:
+                    total_margin_recycled += returned - freed_margin
+                
+                # Trade verilerini zenginleştir
+                trade['balance_at_entry'] = pos['entry_balance']
+                trade['pnl_usd'] = net_pnl
+                trade['balance_after'] = available
+                trade['allocated_margin'] = pos['margin']
+                executed_trades.append(trade)
+                
+                # Portföy değeri ile drawdown izle
+                total_locked = sum(p['margin'] * p['remaining_pct'] for p in active.values())
+                total_value = available + total_locked
+                if total_value > peak_balance:
+                    peak_balance = total_value
+                dd = (peak_balance - total_value) / peak_balance * 100
+                if dd > max_drawdown:
+                    max_drawdown = dd
+                
+                # Pozisyon gruplama
+                if pos_id not in aggregated:
+                    aggregated[pos_id] = {
+                        'symbol': trade['symbol'],
+                        'entry_time': trade['entry_time'],
+                        'exit_time': trade['exit_time'],
+                        'total_pnl_usd': 0.0,
+                        'total_pnl_pct': 0.0,
+                        'results': [],
+                        'balance_at_start': pos['entry_balance'],
+                        'allocated_margin': pos['margin'],
+                    }
+                aggregated[pos_id]['total_pnl_usd'] += net_pnl
+                aggregated[pos_id]['total_pnl_pct'] += trade['pnl_pct']
+                aggregated[pos_id]['results'].append(trade['result'])
+                aggregated[pos_id]['exit_time'] = trade['exit_time']
+                
+                # Tam kapanmış pozisyonu temizle
+                if pos['remaining_pct'] <= 0.01:
+                    del active[pos_id]
+        
+        # Hala açık pozisyonların marjinini ekle
+        final_balance = available + sum(p['margin'] * p['remaining_pct'] for p in active.values())
+        
+        return {
+            'final_balance': final_balance,
+            'available_balance': available,
+            'executed_trades': executed_trades,
+            'aggregated_positions': aggregated,
+            'skipped_count': len(skipped),
+            'max_drawdown': max_drawdown,
+            'total_margin_recycled': total_margin_recycled,
+            'active_positions': len(active),
+        }
 
 # ==========================================
 # � PARALEL WORKER FONKSİYONU
@@ -644,7 +802,8 @@ def run_backtest():
     if SINGLE_COIN:
         print(f"🎯 Sadece: {SINGLE_COIN}")
     print("-" * 70)
-    print(f"⚙️ Side: {STRATEGY_SIDE} | Score: {SCORE_THRESHOLD} | Win Rate: {MIN_WIN_RATE}%")
+    print(f"⚙️ Side: {STRATEGY_SIDE} | Score: {SCORE_THRESHOLD} | Min Reasons: {MIN_REASONS}")
+    print(f"🛡️ Coin Blacklist: {COIN_BLACKLIST_AFTER} art arda kayıp → {COIN_BLACKLIST_CANDLES} mum devre dışı")
     print(f"🎯 SL: ATR x {SL_ATR_MULT} | TP1: 1:{TP1_RR} | TP2: 1:{TP2_RR} | TP3: 1:{TP3_RR}")
     print("=" * 70)
     
@@ -746,52 +905,29 @@ def run_backtest():
         rr = abs(avg_win / avg_loss)
         print(f"📈 Risk/Reward: 1:{rr:.2f}")
     
-    # Final bakiye ve Pozisyon Gruplama
-    final_balance = INITIAL_BALANCE
-    aggregated_positions = {}
-
-    for trade in all_trades:
-        trade['balance_at_entry'] = final_balance
-        pnl = trade['pnl_pct'] * LEVERAGE
-        position_size = final_balance * (POSITION_SIZE_PCT / 100)
-        profit = position_size * (pnl / 100)
-        fee = position_size * LEVERAGE * (MAKER_FEE + TAKER_FEE)
-        net_pnl_usd = profit - fee
-        
-        trade['pnl_usd'] = net_pnl_usd
-        final_balance += net_pnl_usd
-        trade['balance_after'] = final_balance
-
-        # Pozisyon Gruplama (TP1, TP2, TP3 birleştirme)
-        pos_id = f"{trade['symbol']}_{trade['entry_time']}"
-        if pos_id not in aggregated_positions:
-            aggregated_positions[pos_id] = {
-                'symbol': trade['symbol'],
-                'entry_time': trade['entry_time'],
-                'exit_time': trade['exit_time'],
-                'total_pnl_usd': 0.0,
-                'total_pnl_pct': 0.0,
-                'results': [],
-                'balance_at_start': trade['balance_at_entry']
-            }
-        
-        aggregated_positions[pos_id]['total_pnl_usd'] += net_pnl_usd
-        aggregated_positions[pos_id]['total_pnl_pct'] += trade['pnl_pct']
-        aggregated_positions[pos_id]['results'].append(trade['result'])
-        # exit_time'ı en sonuncusuyla güncelle
-        aggregated_positions[pos_id]['exit_time'] = trade['exit_time']
+    # 💰 DİNAMİK MARJİN SİMÜLASYONU
+    simulator = PortfolioSimulator(INITIAL_BALANCE, POSITION_SIZE_PCT, LEVERAGE, MAKER_FEE, TAKER_FEE)
+    sim_result = simulator.simulate(all_trades)
+    
+    final_balance = sim_result['final_balance']
+    all_trades = sim_result['executed_trades']
+    aggregated_positions = sim_result['aggregated_positions']
     
     profit_loss = final_balance - INITIAL_BALANCE
-    win_rate = (len(wins) / len(all_trades) * 100) if all_trades else 0
+    win_rate = (len(wins) / (len(wins) + len(losses)) * 100) if (wins or losses) else 0
     
     print("\n" + "=" * 70)
-    print("💰 BACKTEST SONUCU")
+    print("💰 BACKTEST SONUCU (Dinamik Marjin)")
     print("=" * 70)
-    print(f"📈 Toplam İşlem: {len(all_trades)}")
+    print(f"📈 Toplam İşlem Segmenti: {len(all_trades)}")
     print(f"📊 Win Rate: {win_rate:.1f}%")
     print(f"💵 Başlangıç: ${INITIAL_BALANCE:.2f}")
     print(f"💵 Final: ${final_balance:.2f}")
     print(f"{'📈' if profit_loss >= 0 else '📉'} Kar/Zarar: ${profit_loss:+.2f} ({profit_loss/INITIAL_BALANCE*100:+.2f}%)")
+    print(f"🔄 TP'lerden Geri Kazanılan: ${sim_result['total_margin_recycled']:.2f}")
+    if sim_result['skipped_count'] > 0:
+        print(f"⏭️ Bakiye yetersiz - atlanan: {sim_result['skipped_count']} pozisyon")
+    print(f"📉 Portföy Max Drawdown: %{sim_result['max_drawdown']:.2f}")
     print("=" * 70)
     
     # En iyi/kötü işlemler (POZİSYON BAZLI ve DOLAR GETİRİSİNE GÖRE)
