@@ -979,13 +979,13 @@ def run_backtest():
                 df_pos['results'] = df_pos['results'].apply(lambda x: ", ".join(x) if isinstance(x, list) else x)
             
             # Sayıları yuvarla ve TÜRKÇE EXCEL İÇİN VİRGÜLE ÇEVİR
-            num_cols_pos = ['total_pnl_usd', 'total_pnl_pct', 'balance_at_start']
+            num_cols_pos = ['total_pnl_usd', 'total_pnl_pct', 'balance_at_start', 'allocated_margin']
             for col in num_cols_pos:
                 if col in df_pos.columns:
                     df_pos[col] = df_pos[col].round(2).astype(str).str.replace('.', ',', regex=False)
 
             # Trade log'u da yuvarla ve virgüllü yap
-            num_cols_trades = ['pnl_pct', 'pnl_usd', 'balance_at_entry', 'balance_after', 'pnl_lev_pct', 'entry_price', 'exit_price']
+            num_cols_trades = ['pnl_pct', 'pnl_usd', 'balance_at_entry', 'balance_after', 'pnl_lev_pct', 'entry_price', 'exit_price', 'allocated_margin']
             for col in num_cols_trades:
                 if col in df_results.columns:
                     df_results[col] = df_results[col].round(6).astype(str).str.replace('.', ',', regex=False)
