@@ -1,8 +1,32 @@
 # 📋 CHANGELOG - Crypto Trading Bot
 
+## [v2.1.0] - 2026-02-12
+
+### 🚀 Gelişmiş Strateji & Risk Yönetimi
+
+#### 🧠 Akıllı Karar Mekanizmaları
+
+- **Funding Rate Alpha:** Piyasa kalabalığını (sentimet) ölçen indikatör entegre edildi. Herkes short iken short açmayı engelleyen (Short Squeeze koruması) ve herkes long iken kontrarian avantaj sağlayan puanlama sistemi eklendi.
+- **Signal Decay Exit:** Sinyal gücü giriş seviyesinden %60 aşağı düştüğünde ve pozisyon kârdaysa otomatik kapanış yapan "Zamana Bağlı Çürüme" filtresi eklendi.
+- **Top 5 Candidate Log:** Her döngüde sadece sinyalleri değil, en yüksek puanlı ilk 5 aday coini ve neden filtrelendiklerini gösteren şeffaf tarama raporu eklendi.
+
+#### 🛡️ Koruma Filtreleri (Anti-Pump)
+
+- **God Candle Filter:** Ani ve iğnesiz %3+ yükselen dev mumlara karşı giriş engeli.
+- **Volume Surge Filter:** Hacim ortalamasının 3.5 katını aşan "breakout" patlamalarına karşı koruma.
+- **ATR Volatility Guard:** ATR'nin 3 katını aşan anormal hareketlerde "kafa atmayı" önleyen filtre.
+
+#### 🧹 Altyapı & Robustness
+
+- **Hybrid TP/SL Mimarisi:**
+  - **SL:** Pozisyona bağlı `closePosition: true` emir tipine geçildi. Bu sayede stop emirleri Open Orders tabı yerine direkt pozisyonun yanında görünür ve pozisyon kapanınca otomatik silinir (Yetim emir sorunu çözüldü).
+  - **TP:** Tamamen yazılımsal yönetime geçildi. Borsa tarafında TP emri bekletilmez, bot fiyatı takip ederek kısmi kapama yapar.
+- **İnatçı Emir (Persistent Order):** Borsa miktar/notional limitlerine takılan emirlerde otomatik miktar küçültme ve 3 kez yeniden deneme mekanizması.
+- **Orphan Order Cleanup:** Aktif pozisyonu kalmayan coinlerin askıda kalan tüm emirlerini her döngüde otomatik temizleyen süpürge mekanizması.
+
 ## [v2.0.0] - 2026-02-12
 
-### 🚀 Live Trading Bot Mimarisi
+### 🚀 Live Trading Bot Mimarisi (Stabilizasyon)
 
 #### 🤖 Yeni Modüller (`src/bot/`)
 

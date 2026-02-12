@@ -38,7 +38,7 @@ class MarketScanner:
         
         try:
             # Tüm futures sembollerini ve hacimlerini çek
-            tickers_list = self.exchange.client.fapiPublicGetTicker24hr()
+            tickers_list = self.exchange.exchange.fapiPublicGetTicker24hr()
         except Exception as e:
             logger.error(f"⚠️ Futures ticker bilgileri çekilirken hata oluştu: {e}")
             return
@@ -79,7 +79,7 @@ class MarketScanner:
         self.last_refresh = now
         logger.info(f"✅ {len(self.symbols)} coin yüklendi (Filtrelendi)")
 
-    def scan_symbol(self, symbol: str) -> dict | None:
+    def scan_symbol(self, symbol: str, include_all: bool = False) -> dict | None:
         """Tek bir coin'i tara ve sinyal üret"""
         try:
             ohlcv = self.exchange.fetch_ohlcv(symbol, TIMEFRAME, OHLCV_LIMIT)
@@ -89,7 +89,10 @@ class MarketScanner:
             df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
 
-            signal = generate_signal(df, symbol)
+            # Funding Rate çek (Piyasa kalabalık göstergesi)
+            funding_rate = self.exchange.fetch_funding_rate(symbol)
+
+            signal = generate_signal(df, symbol, include_all=include_all, funding_rate=funding_rate)
             return signal
 
         except Exception as e:
@@ -97,26 +100,38 @@ class MarketScanner:
             return None
 
     def scan_all(self) -> list[dict]:
-        """Tüm coinleri tara, sinyalleri topla"""
+        """Tüm coinleri tara, sinyalleri topla ve en iyi adayları göster"""
         self.refresh_symbols()
         signals = []
+        all_candidates = []
 
         for i, symbol in enumerate(self.symbols):
-            signal = self.scan_symbol(symbol)
+            # Adayları toplamak için include_all=True kullanıyoruz
+            signal = self.scan_symbol(symbol, include_all=True)
             if signal:
-                signals.append(signal)
+                all_candidates.append(signal)
+                if signal.get('is_valid'):
+                    signals.append(signal)
 
             # Rate limit koruması
-            if (i + 1) % 10 == 0:
-                time.sleep(0.5)
+            if (i + 1) % 15 == 0:
+                time.sleep(0.3)
 
-        # Skora göre sırala (en yüksek önce)
-        signals.sort(key=lambda s: s['score'], reverse=True)
+        # Tüm adayları skora göre sırala
+        all_candidates.sort(key=lambda s: s['score'], reverse=True)
+        
+        # En iyi 5 adayı terminalde göster (Sinyal olmasa bile)
+        logger.info("📋 --- EN İYİ 5 ADAY ---")
+        for cand in all_candidates[:5]:
+            status = "✅ GEÇERLİ" if cand['is_valid'] else f"🚫 {cand['filter_reason']}"
+            fr = cand.get('funding_rate', 0)
+            fr_icon = "🟢" if fr > 0.03 else ("🔴" if fr < -0.05 else "⚪")
+            logger.info(f"🔹 {cand['symbol']}: Skor {cand['score']} | {status} | FR:{fr_icon}{fr*100:.3f}% | {', '.join(cand['reasons'][:3])}...")
 
         if signals:
-            logger.info(f"🎯 {len(signals)} sinyal bulundu (top: {signals[0]['symbol']} skor:{signals[0]['score']})")
+            signals.sort(key=lambda s: s['score'], reverse=True)
+            logger.info(f"🎯 {len(signals)} GEÇERLİ SİNYAL BULUNDU!")
         else:
-            logger.info("🔍 Sinyal bulunamadı")
+            logger.info("🔍 Kriterlere uygun geçerli sinyal bulunamadı.")
 
         return signals
-```

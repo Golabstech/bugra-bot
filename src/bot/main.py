@@ -70,8 +70,12 @@ def main():
             cycle_count += 1
             logger.info(f"\n🔄 Döngü #{cycle_count} başlıyor...")
 
+            # 0. Portföy Senkronizasyonu (Borsa ile eşleşme)
+            # Bu adım hayalet pozisyonları temizler ve gerçek bakiyeyi günceller
+            portfolio.sync_positions()
+
             # 1. Açık pozisyonları kontrol et (TP/SL)
-            trade_manager.check_positions()
+            trade_manager.check_positions(scanner=scanner)
 
             # 2. Piyasayı tara
             signals = scanner.scan_all()

@@ -41,30 +41,36 @@ DAILY_LOSS_LIMIT_PCT = float(os.getenv("DAILY_LOSS_LIMIT_PCT", "10"))
 # ⚡ STRATEJİ FİLTRELERİ
 # ==========================================
 STRATEGY_SIDE = os.getenv("STRATEGY_SIDE", "SHORT")
-SCORE_THRESHOLD = int(os.getenv("SCORE_THRESHOLD", "90"))
+SCORE_THRESHOLD = int(os.getenv("SCORE_THRESHOLD", "80")) # 85 -> 80 (Test Modu)
+
 MIN_REASONS = int(os.getenv("MIN_REASONS", "4"))
-COOLDOWN_CANDLES = int(os.getenv("COOLDOWN_CANDLES", "8"))
+COOLDOWN_CANDLES = int(os.getenv("COOLDOWN_CANDLES", "5")) # 8 -> 5 (Daha hızlı tekrar giriş)
 COIN_BLACKLIST_AFTER = int(os.getenv("COIN_BLACKLIST_AFTER", "3"))
 COIN_BLACKLIST_CANDLES = int(os.getenv("COIN_BLACKLIST_CANDLES", "32"))
 
 # 🎯 VOLATİLİTE
 MAX_ATR_PERCENT = float(os.getenv("MAX_ATR_PERCENT", "4.5"))
 MIN_ATR_PERCENT = float(os.getenv("MIN_ATR_PERCENT", "0.5"))
-HARD_STOP_LOSS_PCT = float(os.getenv("HARD_STOP_LOSS_PCT", "7.0"))
+HARD_STOP_LOSS_PCT = float(os.getenv("HARD_STOP_LOSS_PCT", "3.5")) # %7 -> %3.5 (Acımasız Stop)
 
+# 🎯 TP / SL
 # 🎯 TP / SL
 TP1_CLOSE_PCT = 0.40
 TP2_CLOSE_PCT = 0.30
 TP3_CLOSE_PCT = 0.30
-SL_ATR_MULT = float(os.getenv("SL_ATR_MULT", "2.4"))
-TP1_RR = float(os.getenv("TP1_RR", "1.8"))
-TP2_RR = float(os.getenv("TP2_RR", "2.8"))
-TP3_RR = float(os.getenv("TP3_RR", "4.5"))
+SL_ATR_MULT = float(os.getenv("SL_ATR_MULT", "2.0"))  # 2.4 -> 2.0 (Daha Sıkı)
+TP1_RR = float(os.getenv("TP1_RR", "1.3"))          # 1.8 -> 1.3 (Vur-Kaç)
+TP2_RR = float(os.getenv("TP2_RR", "2.4"))          # 2.8 -> 2.4
+TP3_RR = float(os.getenv("TP3_RR", "4.0"))          # 4.5 -> 4.0
+
+# 🧪 DARWINIST (SIGNAL DECAY) AYARLARI
+SIGNAL_DECAY_THRESHOLD = 20    # Skor bu değerin altına düşerse tahliye et (25 -> 20: Daha Sabırlı)
+SIGNAL_DECAY_GRACE_PERIOD = 4  # İlk 4 mumda tahliye yapma (gürültü koruması)
 
 # ==========================================
 # ⏱️ TARAMA AYARLARI
 # ==========================================
-SCAN_INTERVAL_SECONDS = int(os.getenv("SCAN_INTERVAL_SECONDS", "60"))
+SCAN_INTERVAL_SECONDS = int(os.getenv("SCAN_INTERVAL_SECONDS", "30")) # 60 -> 30 (Hızlı Test)
 TIMEFRAME = os.getenv("TIMEFRAME", "15m")
 OHLCV_LIMIT = int(os.getenv("OHLCV_LIMIT", "100"))
 TOP_COINS_COUNT = int(os.getenv("TOP_COINS_COUNT", "100"))

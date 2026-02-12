@@ -55,11 +55,17 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df['mfi'] = ta.mfi(df['high'], df['low'], df['close'], df['volume'], length=14)
     df['atr'] = ta.atr(df['high'], df['low'], df['close'], length=14)
 
+    # 📊 HACİM ANALİZİ
+    # Hacim ortalaması (Mevcut mum hariç son 20 mum)
+    df['vol_avg20'] = df['volume'].shift(1).rolling(window=20).mean()
+    # Hacim oranı (Şu anki hacim / Önceki ortalama)
+    df['vol_ratio'] = df['volume'] / df['vol_avg20']
+
     df = df.ffill().fillna(0).infer_objects(copy=False)
     return df
 
 
-def score_short(row: pd.Series) -> tuple[int, int, list[str]]:
+def score_short(row: pd.Series, prev_row: pd.Series = None) -> tuple[int, int, list[str]]:
     """Son mum için SHORT skor hesapla → (score, reason_count, reasons)"""
     score = 0
     reasons = []
@@ -69,13 +75,27 @@ def score_short(row: pd.Series) -> tuple[int, int, list[str]]:
     bb_pct, stoch_k, mfi = row['bb_pct'], row['stoch_k'], row['mfi']
     ema9, ema21, sma50 = row['ema9'], row['ema21'], row['sma50']
 
-    # ADX + DI
+    # ADX + DI (Backtest: Zararlı çıktı, puanı düşürüldü)
     if adx > 25 and di_minus > di_plus:
-        score += 30
+        score += 10 # 30 -> 10
         reasons.append(f"ADX({adx:.0f})+DI-")
     elif di_minus > di_plus:
-        score += 15
-        reasons.append("DI->DI+")
+        score += 5 # 15 -> 5
+    # ADX (Trend Gücü - Düşük olması tercih sebebi çünkü yatay piyasa = reversion)
+    if float(row['adx']) < 30:
+        reasons.append(f"ADX({int(row['adx'])})")
+        score += 20  # 15 -> 20 (Biraz gevşetildi)
+    elif float(row['adx']) > 50:
+        score -= 10
+        reasons.append("ADX-High")
+
+    # ADX + DI (Backtest: Zararlı çıktı, puanı düşürüldü) - Bu kısım yeni ADX puanlaması ile çakışabilir, dikkatli ol.
+    # if adx > 25 and di_minus > di_plus:
+    #     score += 10 # 30 -> 10
+    #     reasons.append(f"ADX({adx:.0f})+DI-")
+    # elif di_minus > di_plus:
+    #     score += 5 # 15 -> 5
+    #     reasons.append("DI->DI+")
 
     # SMA50 Overextension
     dist = (row['close'] - sma50) / sma50 * 100 if sma50 > 0 else 0
@@ -175,11 +195,11 @@ def score_long(row: pd.Series) -> tuple[int, int, list[str]]:
     return score, len(reasons), reasons
 
 
-def generate_signal(df: pd.DataFrame, symbol: str) -> dict | None:
+def generate_signal(df: pd.DataFrame, symbol: str, include_all: bool = False, funding_rate: float = 0.0) -> dict | None:
     """
     OHLCV DataFrame'den sinyal üret.
     Sinyal varsa → {'symbol', 'side', 'score', 'reasons', 'entry_price', 'sl', 'tp1', 'tp2', 'tp3', 'atr'}
-    Sinyal yoksa → None
+    Sinyal yoksa (ve include_all=False) → None
     """
     if len(df) < 50:
         return None
@@ -192,30 +212,84 @@ def generate_signal(df: pd.DataFrame, symbol: str) -> dict | None:
 
     # Volatilite filtresi
     atr_pct = (atr / price) * 100 if price > 0 else 0
-    if atr_pct > MAX_ATR_PERCENT or atr_pct < MIN_ATR_PERCENT:
-        return None
+    volatility_ok = MIN_ATR_PERCENT <= atr_pct <= MAX_ATR_PERCENT
+    
+    is_valid = True
+    filter_reason = ""
+
+    if not volatility_ok:
+        is_valid = False
+        filter_reason = "Volatility"
+        if not include_all:
+            return None
 
     side = STRATEGY_SIDE
 
     if side == 'SHORT':
-        score, num_reasons, reasons = score_short(last)
-        # Boğa koruması
+        score, num_reasons, reasons = score_short(last, prev)
+        
+        # Boğa koruması ve Momentum Filtresi
         sma50 = float(last['sma50'])
-        macd_confirmed = float(last['macd']) < float(last['macd_signal'])
-        is_bull = price > sma50
-        threshold = SCORE_THRESHOLD + 10 if is_bull else SCORE_THRESHOLD
-        if is_bull and macd_confirmed:
+        current_rsi = float(last['rsi'])
+        prev_rsi = float(prev['rsi'])
+        
+        # 1. Momentum Filtresi (RSI 80+ ve hala artıyorsa girme)
+        if current_rsi >= 80 and current_rsi >= prev_rsi:
+            is_valid = False
+            filter_reason = "Momentum"
+            if not include_all: return None
+
+        # 2. Hacim Patlaması Filtresi (Short Squeeze Koruması)
+        # Önceki ortalamanın 3.5 katı hacim varsa risklidir.
+        if float(last['vol_ratio']) > 3.5:
+            is_valid = False
+            filter_reason = "Volume"
+            if not include_all: return None
+
+        # 3. God Candle Filtresi (İğnesiz dev mum veya ATR patlaması)
+        candle_body = abs(last['close'] - last['open'])
+        # Eğer mum boyu, son 14 mumun ortalama hareketinin (ATR) 3 katından büyükse dikey patlamadır.
+        if candle_body > (atr * 3):
+            is_valid = False
+            filter_reason = "GodCandle"
+            if not include_all: return None
+
+        candle_change = (last['close'] - last['open']) / last['open'] * 100
+        wick_size = (last['high'] - last['close']) / (last['high'] - last['low']) if (last['high'] - last['low']) > 0 else 0
+        if candle_change > 3.0 and wick_size < 0.15:
+             is_valid = False
+             filter_reason = "GodCandle"
+             if not include_all: return None
+             
+        # 4. Funding Rate Filtresi (Kalabalık Göstergesi)
+        # Pozitif FR = Herkes long → Short kontrarian avantaj (+puan)
+        # Negatif FR = Herkes short → Short kalabalık (-puan / block)
+        fr_pct = funding_rate * 100  # 0.001 → 0.1%
+        if fr_pct > 0.03:
             score += 15
-        if is_bull and float(last['rsi']) > 85 and float(last['rsi']) >= float(prev['rsi']):
-            return None
+            reasons.append(f"FR+({fr_pct:.2f}%)")
+        elif fr_pct < -0.1:
+            # Aşırı kalabalık: Short Squeeze riski çok yüksek
+            is_valid = False
+            filter_reason = "Funding"
+            if not include_all: return None
+        elif fr_pct < -0.05:
+            score -= 15
+            reasons.append(f"FR-({fr_pct:.2f}%)")
+
+        # 5. Fiyat SMA50 üzerinde mi? (Boğa trendine kafa atma)
+        if price > sma50:
+            threshold = SCORE_THRESHOLD + 15
+        else:
+            threshold = SCORE_THRESHOLD
     else:
         score, num_reasons, reasons = score_long(last)
         threshold = SCORE_THRESHOLD
 
-    if score < threshold:
-        return None
-    if num_reasons < MIN_REASONS:
-        return None
+    if score < threshold or num_reasons < MIN_REASONS:
+        is_valid = False
+        filter_reason = "Score"
+        if not include_all: return None
 
     # SL / TP hesapla
     risk = atr * SL_ATR_MULT
@@ -243,7 +317,12 @@ def generate_signal(df: pd.DataFrame, symbol: str) -> dict | None:
         'tp3': round(tp3, 6),
         'atr': atr,
         'atr_pct': atr_pct,
+        'funding_rate': funding_rate,
+        'is_valid': is_valid,
+        'filter_reason': filter_reason
     }
 
-    logger.info(f"🎯 SİNYAL: {symbol} {side} | Skor: {score} | {', '.join(reasons)}")
+    if is_valid:
+        logger.info(f"🎯 SİNYAL: {symbol} {side} | Skor: {score} | {', '.join(reasons)}")
+    
     return signal

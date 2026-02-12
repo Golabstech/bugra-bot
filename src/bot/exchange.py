@@ -18,7 +18,10 @@ class ExchangeClient:
         self.exchange = ccxt.binance({
             'apiKey': BINANCE_API_KEY,
             'secret': BINANCE_API_SECRET,
-            'options': {'defaultType': 'future'},
+            'options': {
+                'defaultType': 'future',
+                'warnOnFetchOpenOrdersWithoutSymbol': False,
+            },
             'enableRateLimit': True,
         })
 
@@ -124,19 +127,18 @@ class ExchangeClient:
                 logger.error(f"❌ Pozisyon kapatılamadı {symbol}: {e}")
             return None
 
-    def set_stop_loss(self, symbol: str, side: str, stop_price: float, amount: float) -> dict | None:
-        """Stop loss emri koy"""
+    def set_stop_loss(self, symbol: str, side: str, stop_price: float, amount: float = 0) -> dict | None:
+        """Stop loss emri koy (Pozisyona bağlı — closePosition)"""
         try:
             sl_side = 'buy' if side == 'SHORT' else 'sell'
             order = self.exchange.create_order(
-                symbol, 'stop_market', sl_side, amount,
+                symbol, 'stop_market', sl_side, None,
                 params={
                     'stopPrice': stop_price,
-                    'reduceOnly': True,
-                    'closePosition': False,
+                    'closePosition': True,
                 }
             )
-            logger.info(f"🛑 SL ayarlandı: {symbol} @ {stop_price}")
+            logger.info(f"🛑 SL ayarlandı: {symbol} @ {stop_price} (Pozisyona bağlı)")
             return order
         except Exception as e:
             logger.error(f"❌ SL ayarlanamadı {symbol}: {e}")
@@ -168,6 +170,48 @@ class ExchangeClient:
         except Exception as e:
             logger.warning(f"⚠️ Emir iptali başarısız {symbol}: {e}")
 
+    def get_open_orders(self, symbol: str = None) -> list:
+        """Açık emirleri listele (sembol opsiyonel)"""
+        try:
+            if symbol:
+                return self.exchange.fetch_open_orders(symbol)
+            return self.exchange.fetch_open_orders()
+        except Exception as e:
+            logger.debug(f"Emir listesi alınamadı: {e}")
+            return []
+
+    def cleanup_orphan_orders(self, active_symbols: set):
+        """
+        🧹 YETİM EMİR TEMİZLİĞİ
+        Aktif pozisyonu olmayan coinlerin bekleyen emirlerini iptal et.
+        Sembol bazlı çalışır (rate limit dostu).
+        """
+        try:
+            # Tüm açık emirleri çek
+            open_orders = self.get_open_orders()
+            if not open_orders:
+                return
+            
+            # Emirlerdeki benzersiz sembolleri çıkar
+            order_symbols = set()
+            for order in open_orders:
+                raw_sym = order.get('info', {}).get('symbol', '')
+                if not raw_sym:
+                    raw_sym = order['symbol'].replace('/', '').split(':')[0]
+                order_symbols.add(raw_sym)
+            
+            # Aktif pozisyonu olmayan sembollerin emirlerini temizle
+            orphan_symbols = order_symbols - active_symbols
+            
+            if orphan_symbols:
+                logger.info(f"🧹 {len(orphan_symbols)} yetim sembol tespit edildi: {orphan_symbols}")
+                for sym in orphan_symbols:
+                    self.cancel_all_orders(sym)
+                logger.info(f"✅ Yetim emirler temizlendi!")
+                    
+        except Exception as e:
+            logger.warning(f"⚠️ Yetim emir temizliği atlandi: {e}")
+
     def fetch_ohlcv(self, symbol: str, timeframe: str = '15m', limit: int = 100) -> list:
         """OHLCV verisi çek"""
         try:
@@ -188,6 +232,63 @@ class ExchangeClient:
                     continue
                 logger.error(f"❌ Ticker alınamadı {symbol}: {e}")
         return None
+
+    def fetch_funding_rate(self, symbol: str) -> float:
+        """Funding rate çek (Piyasa kalabalık göstergesi)"""
+        try:
+            funding = self.exchange.fetch_funding_rate(symbol)
+            rate = float(funding.get('fundingRate', 0))
+            return rate
+        except Exception as e:
+            logger.debug(f"Funding rate alınamadı {symbol}: {e}")
+            return 0.0
+
+    def get_market_limits(self, symbol: str) -> dict:
+        """Market limitlerini getir (Min/Max miktar)"""
+        try:
+            # Market verisinin yüklü olduğundan emin ol
+            if not self.exchange.markets:
+                self.exchange.load_markets()
+            
+            market = self.exchange.market(symbol)
+            limits = {
+                'min_qty': float(market['limits']['amount']['min']),
+                'max_qty': float(market['limits']['amount']['max']),
+            }
+            # Debug için limitleri gör
+            # logger.info(f"⚖️ {symbol} Limitleri: {limits}")
+            return limits
+        except Exception as e:
+            logger.warning(f"⚠️ Market limitleri alınamadı {symbol}: {e}")
+            return {'min_qty': 0.0, 'max_qty': float('inf')}
+
+    def sanitize_amount(self, symbol: str, amount: float) -> float:
+        """Miktarı market limitlerine (Min/Max/Precision) uygun hale getir"""
+        try:
+            limits = self.get_market_limits(symbol)
+            
+            original_amount = amount
+
+            # Max limit kontrolü
+            if amount > limits['max_qty']:
+                logger.warning(f"⚠️ {symbol} miktar ({amount}) max limiti aşıyor. {limits['max_qty']} değerine çekildi.")
+                amount = limits['max_qty']
+            
+            # Min limit kontrolü
+            if amount < limits['min_qty']:
+                logger.warning(f"⚠️ {symbol} miktar ({amount}) min limitin altında.")
+                return 0.0
+
+            # Step size / Precision
+            final_amount = float(self.exchange.amount_to_precision(symbol, amount))
+            
+            if original_amount != final_amount:
+                logger.info(f"📏 Miktar Ayarlandı {symbol}: {original_amount} -> {final_amount} (Max: {limits['max_qty']})")
+            
+            return final_amount
+        except Exception as e:
+            logger.error(f"❌ Miktar normalize edilemedi {symbol}: {e}")
+            return amount
 
     def fetch_top_futures_symbols(self, count: int = 100) -> list[str]:
         """Hacme göre ilk N futures sembolünü getir"""

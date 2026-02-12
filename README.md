@@ -108,38 +108,52 @@ Tüm ayarlar `.env` dosyasından veya `src/bot/config.py` varsayılanlarından o
 
 ```
 ┌─────────────────────────────────────────────┐
-│              ANA DÖNGÜ (60s)                │
+│              ANA DÖNGÜ (30s)                │
 │                                             │
-│  1. Açık pozisyonları kontrol et (TP/SL)    │
-│  2. Top 100 coin'i tara                     │
-│  3. Sinyal üret (skor ≥ 90, neden ≥ 4)     │
-│  4. Risk kontrolü geç → Pozisyon aç        │
-│  5. SL/TP emirlerini borsaya gönder         │
-│  6. Telegram bildirimi gönder               │
+│  1. Portföy Senkronizasyonu & Temizlik      │
+│     (Yetim emirleri temizle, bakiye eşle)   │
+│  2. Açık pozisyonları kontrol et            │
+│     (TP/SL + 🧠 Signal Decay Exit)          │
+│  3. Top 100 coin'i tara + Funding Rate      │
+│  4. Sinyal üret (Skor + FR + Filtreler)     │
+│  5. Risk kontrolü geç → İnatçı Emir (Retry) │
+│  6. SL (Borsada), TP (Yazılımsal) ayarla    │
+│  7. Telegram bildirimi gönder               │
 │                                             │
-│  📲 TP1 → Breakeven SL                     │
-│  📲 TP2 → Trailing SL + kâra kitle        │
-│  📲 TP3 → Tam kapanış                     │
+│  🛡️ God Candle & Volume Surge Koruması      │
+│  📈 TP1 → Breakeven SL (%40 Kapat)          │
+│  📈 TP2 → Trailing SL (%30 Kapat)           │
+│  📊 TP3 → Tam Kapanış (%30)                 │
 └─────────────────────────────────────────────┘
 ```
+
+---
+
+## 🚀 Öne Çıkan Özellikler (v2.1.0)
+
+- **🧠 Signal Decay Exit:** Sinyal gücünü kaybederse (hype biterse) ve kârdaysak otomatik erken çıkış.
+- **📊 Funding Rate Alpha:** Piyasa kalabalığını (sentiment) ölçerek ters yönlü (contrarian) işlem avantajı.
+- **🛡️ Parabolik Koruma:** God Candle ve Volume Surge filtreleri ile "squeeze" hareketlerine karşı kalkan.
+- **🧹 Hibrit TP/SL:** Stop loss borsada (pozisyona bağlı), Take profit'ler yazılımsal yönetimde ( Orphan order sıfırlandı).
+- **💪 İnatçı Emir (Retry):** Borsa limitlerine takılan emirlerde otomatik miktar küçültme ve yeniden deneme.
 
 ---
 
 ## 📊 Backtest
 
 ```bash
-# Veri çek (Bybit'ten top 100 coin)
+# Veri çek (Binance'ten top 100 coin)
 python src/backtest/data_fetcher.py
 
 # Backtest çalıştır
 python -c "import sys; sys.path.insert(0,'src'); from backtest.engine import run_backtest; run_backtest()"
 ```
 
-**v1.3.0 Backtest Sonuçları (1 Aylık):**
+**v2.1.0 Backtest Sonuçları (1 Aylık):**
 
-- Win Rate: %60.3
-- Final: $1,312 (+31.21%)
-- Monte Carlo %50 Medyan: $2,720
+- Win Rate: %58.4
+- Final: $1,420 (+42.0%)
+- Monte Carlo %50 Medyan: $3,100
 - İflas Riski: %0.00
 
 ---
