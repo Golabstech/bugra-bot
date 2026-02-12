@@ -1,5 +1,38 @@
 # 📋 CHANGELOG - Crypto Trading Bot
 
+## [v2.0.0] - 2026-02-12
+
+### 🚀 Live Trading Bot Mimarisi
+
+#### 🤖 Yeni Modüller (`src/bot/`)
+
+- **`config.py`** — Merkezi konfigürasyon: `.env` dosyasından tüm ayarları okur (API key, risk limitleri, strateji parametreleri)
+- **`exchange.py`** — CCXT ile Binance Futures connector: Paper/live mode, pozisyon açma/kapama, SL/TP emirleri, OHLCV çekme, top coin listesi
+- **`strategy.py`** — Backtest motorundan taşınan sinyal motoru: Canlı OHLCV verisiyle çalışır, SHORT/LONG skorlama, boğa koruması, ATR volatilite filtresi
+- **`scanner.py`** — Market tarayıcı: Top 100 coin'i periyodik olarak tarar, rate limit korumalı
+- **`trader.py`** — İşlem yöneticisi: Sinyal → Risk kontrolü → Emir → SL/TP. TP1 sonrası breakeven, TP2 sonrası trailing SL
+- **`portfolio.py`** — Portföy & risk yönetimi: Max eş zamanlı pozisyon, günlük kayıp limiti, coin bazlı blacklist/cooldown, dinamik pozisyon boyutlandırma
+- **`notifier.py`** — Telegram bildirim servisi: Sinyal, trade açma/kapama, günlük özet, hata ve risk limiti bildirimleri (async httpx)
+- **`main.py`** — Ana bot döngüsü: Tüm modülleri orkestra eder, graceful shutdown, günlük özet raporu
+
+#### 📁 Proje Organizasyonu
+
+- `src/bot/` — Canlı trading modülleri
+- `src/backtest/` — Backtest modülleri (engine, data_fetcher, analyze)
+- `data/` — Backtest verileri ve CSV sonuçları (gitignored)
+- `logs/` — Log dosyaları (gitignored)
+- `run.py` — Ana giriş noktası
+- `.env.example` — API key template
+- `requirements.txt` — Python bağımlılıkları
+
+#### 🛡️ Risk Yönetimi Özellikleri
+
+- Max 5 eş zamanlı pozisyon
+- Günlük %10 kayıp limiti
+- Kasanın max %50'si riske atılabilir
+- Coin bazlı blacklist (3 art arda kayıp → 32 mum devre dışı)
+- Hard stop loss %7
+
 ## [v1.3.0] - 2026-02-12
 
 ### 🚀 Yeni Özellikler

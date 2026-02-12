@@ -1,8 +1,24 @@
-.tmp.driveupload
+# Environment
+.env
+.venv/
+
+# Python
 __pycache__/
 *.pyc
-.env
-.vscode
+*.pyo
+
+# IDE
+.vscode/
+.idea/
+
+# Data (büyük dosyalar)
+data/
 backtest_data/
-backtest_trades.csv
-backtest_positions.csv
+*.csv
+
+# System
+.tmp.driveupload
+.agent
+
+# Logs
+logs/*.log
