@@ -12,6 +12,9 @@ from .config import (
     TP1_CLOSE_PCT, TP2_CLOSE_PCT, TP3_CLOSE_PCT,
 )
 
+from .redis_client import redis_client
+import json
+
 logger = logging.getLogger("portfolio")
 
 
@@ -20,24 +23,59 @@ class Position:
     def __init__(self, symbol: str, side: str, entry_price: float,
                  amount: float, margin: float, sl: float,
                  tp1: float, tp2: float, tp3: float, reasons: list,
-                 entry_score: int = 0):
+                 entry_score: int = 0, opened_at: str = None):
         self.symbol = symbol
         self.side = side
-        self.entry_price = entry_price
-        self.amount = amount
-        self.initial_amount = amount
-        self.margin = margin
-        self.sl = sl
-        self.tp1 = tp1
-        self.tp2 = tp2
-        self.tp3 = tp3
+        self.entry_price = float(entry_price)
+        self.amount = float(amount)
+        self.initial_amount = float(amount)
+        self.margin = float(margin)
+        self.sl = float(sl)
+        self.tp1 = float(tp1)
+        self.tp2 = float(tp2)
+        self.tp3 = float(tp3)
         self.reasons = reasons
-        self.entry_score = entry_score
+        self.entry_score = int(entry_score)
         self.tp1_hit = False
         self.tp2_hit = False
-        self.opened_at = datetime.now(timezone.utc)
+        self.opened_at = opened_at or datetime.now(timezone.utc).isoformat()
         self.sl_order_id = None
         self.tp_order_ids = []
+
+    def to_dict(self) -> dict:
+        """JSON için serileştir"""
+        return {
+            'symbol': self.symbol,
+            'side': self.side,
+            'entry_price': self.entry_price,
+            'amount': self.amount,
+            'initial_amount': self.initial_amount,
+            'margin': self.margin,
+            'sl': self.sl,
+            'tp1': self.tp1,
+            'tp2': self.tp2,
+            'tp3': self.tp3,
+            'reasons': self.reasons,
+            'entry_score': self.entry_score,
+            'tp1_hit': self.tp1_hit,
+            'tp2_hit': self.tp2_hit,
+            'opened_at': self.opened_at
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict):
+        """Sözlükten nesne oluştur"""
+        pos = cls(
+            symbol=data['symbol'], side=data['side'], entry_price=data['entry_price'],
+            amount=data['amount'], margin=data['margin'], sl=data['sl'],
+            tp1=data['tp1'], tp2=data['tp2'], tp3=data['tp3'],
+            reasons=data['reasons'], entry_score=data.get('entry_score', 0),
+            opened_at=data.get('opened_at')
+        )
+        pos.initial_amount = float(data.get('initial_amount', data['amount']))
+        pos.tp1_hit = data.get('tp1_hit', False)
+        pos.tp2_hit = data.get('tp2_hit', False)
+        return pos
 
     @property
     def remaining_pct(self) -> float:
@@ -63,102 +101,86 @@ class PortfolioManager:
         self.coin_cooldowns: dict[str, datetime] = {}
         self.coin_consecutive_losses: dict[str, int] = {}
         
-    def sync_positions(self):
+    async def sync_positions(self):
         """
         🔄 PORTFÖY SENKRONİZASYONU (Reconciliation)
         Botun hafızasındaki pozisyonlar ile borsadaki gerçek pozisyonları eşleştirir.
         Borsada kapanmış ama botta açık görünen 'hayalet' pozisyonları temizler.
         """
         try:
-            # 1. Borsadaki gerçek açık pozisyonları çek
+            # 1. Redis'ten pozisyonları yükle (Eğer hafıza boşsa)
+            if not self.positions:
+                cached_positions = await redis_client.hgetall("bot:positions")
+                if cached_positions:
+                    self.positions = {s: Position.from_dict(d) for s, d in cached_positions.items()}
+                    logger.info(f"📥 Redis'ten {len(self.positions)} pozisyon içe aktarıldı.")
+
+            # 2. Borsadaki gerçek açık pozisyonları çek
             exchange_positions = self.exchange.get_positions() # Liste döner [{'symbol': 'BTCUSDT', ...}]
             
-            # SEMBOL NORMALİZASYONU (Küme oluştururken de yapmalıyız!)
+            # SEMBOL NORMALİZASYONU
             exchange_symbols = set()
             for p in exchange_positions:
                 if float(p.get('contracts', 0)) == 0:
                     continue
-                
-                # Ham sembolü al
-                sym = p['info'].get('symbol')
-                if not sym:
-                    sym = p['symbol'].replace('/', '').split(':')[0]
+                sym = p['info'].get('symbol') or p['symbol'].replace('/', '').split(':')[0]
                 exchange_symbols.add(sym)
             
-            # 2. Botun hafızasındaki pozisyonları kontrol et
-            local_symbols = list(self.positions.keys()) # Kopyasını al
+            # 3. Botun hafızasındaki pozisyonları kontrol et
+            local_symbols = list(self.positions.keys())
             
             for symbol in local_symbols:
                 if symbol not in exchange_symbols:
-                    # 🚨 HAYALET POZİSYON TESPİT EDİLDİ
-                    # Bot "açık" sanıyor ama borsada yok (Stop olmuş, elle kapanmış veya likide olmuş)
                     logger.warning(f"👻 Hayalet pozisyon tespit edildi ve temizleniyor: {symbol}")
-                    
-                    # GÜVENLİK: Askıda kalan TP/SL emirlerini iptal et
                     try:
                         self.exchange.cancel_all_orders(symbol)
-                        logger.info(f"🗑️ {symbol} için askıda kalan emirler temizlendi.")
                     except Exception as e:
                         logger.error(f"❌ {symbol} emir temizleme hatası: {e}")
                     
-                    # Pozisyonu hafızadan sil (PnL hesaplamadan, çünkü veri yok)
                     del self.positions[symbol]
-                    
-            # 3. Borsada olup botta olmayanları (Unutulmuş/Manuel işlemler) ekle
+                    await redis_client.hdel("bot:positions", symbol)
+            
+            # 4. Borsada olup botta olmayanları ekle
             for pos_data in exchange_positions:
-                # SEMBOL DÜZELTME: CCXT 'BTC/USDT' dönerken Scanner 'BTCUSDT' kullanıyor.
-                # Bu yüzden bot "Farklı coin" sanıp tekrar açıyor. Ham sembolü alıyoruz:
-                symbol = pos_data['info'].get('symbol')
-                if not symbol:
-                    # Fallback: Slash ve : temizle
-                    symbol = pos_data['symbol'].replace('/', '').split(':')[0]
-
-                if float(pos_data.get('contracts', 0)) == 0:
-                    continue
+                symbol = pos_data['info'].get('symbol') or pos_data['symbol'].replace('/', '').split(':')[0]
+                if float(pos_data.get('contracts', 0)) == 0: continue
                     
                 if symbol not in self.positions:
                     logger.info(f"🆕 Borsada tespit edilen mevcut pozisyon içe aktarılıyor: {symbol}")
-                    
-                    # Yönü belirle
-                    side = str(pos_data.get('side', '')).upper()
-                    if not side or side == 'NONE': # Bazen side boş gelebilir, amount işaretinden anla
-                        # Binance'de positionAmt negatifse short
-                        raw_amt = float(pos_data['info'].get('positionAmt', 0))
-                        side = 'SHORT' if raw_amt < 0 else 'LONG'
-
-                    # Yeni Position nesnesi oluştur (TP/SL bilinmiyor)
-                    entry_px = float(pos_data.get('entryPrice', 0))
-                    amt = float(pos_data.get('contracts', 0))
-                    
-                    # SL değerini güvenli ata (Hemen stop olmasın)
-                    if side == 'SHORT':
-                        safe_sl = float('inf')
-                    else:
-                        safe_sl = 0.0
+                    raw_amt = float(pos_data['info'].get('positionAmt', 0))
+                    side = 'SHORT' if raw_amt < 0 else 'LONG'
 
                     new_pos = Position(
-                        symbol=symbol,
-                        side=side,
-                        entry_price=entry_px,
-                        amount=amt,
-                        margin=0.0, # Bilinmiyor
-                        sl=safe_sl, # Güvenli değer
-                        tp1=0.0, tp2=0.0, tp3=0.0, # Bilinmiyor
-                        reasons=['Recovered'] # Kurtarıldı
+                        symbol=symbol, side=side, 
+                        entry_price=float(pos_data.get('entryPrice', 0)),
+                        amount=float(pos_data.get('contracts', 0)),
+                        margin=0.0, sl=float('inf') if side == 'SHORT' else 0.0,
+                        tp1=0.0, tp2=0.0, tp3=0.0, reasons=['Recovered']
                     )
                     self.positions[symbol] = new_pos
+                    await redis_client.hset("bot:positions", symbol, new_pos.to_dict())
             
-            # Bilgi Logu (Sadece değişim varsa veya debug modunda)
-            if len(local_symbols) != len(self.positions):
-                logger.info(f"✅ Portföy senkronize edildi. Güncel açık işlem sayısı: {len(self.positions)}")
-                
-            # 4. Yetim Emir Temizliği
-            # Aktif pozisyonu olmayan coinlerin SL/TP emirlerini temizle
+            # 5. Yetim Emir Temizliği
             active_syms = set(self.positions.keys()) | exchange_symbols
             self.exchange.cleanup_orphan_orders(active_syms)
 
+            # 6. Global stats güncelle (API için)
+            stats = self._get_sync_stats()
+            await redis_client.set("bot:stats", stats)
+
         except Exception as e:
             logger.error(f"❌ Portföy senkronizasyonu hatası: {e}")
+
+    def _get_sync_stats(self) -> dict:
+        """Dashboard API için özet veri"""
+        return {
+            'balance': 0, # main.py'de güncellenecek
+            'open_positions': len(self.positions),
+            'daily_pnl': self.daily_pnl,
+            'wins': self.daily_trades['wins'],
+            'losses': self.daily_trades['losses'],
+            'last_update': datetime.now(timezone.utc).isoformat()
+        }
 
 
     def _reset_daily_if_needed(self):
@@ -210,11 +232,11 @@ class PortfolioManager:
 
         return True, "OK"
 
-    def calculate_position_size(self, symbol: str, price: float) -> tuple[float, float]:
+    def calculate_position_size(self, symbol: str, price: float, reduction_factor: float = 1.0) -> tuple[float, float]:
         """Pozisyon büyüklüğü hesapla → (amount, margin)"""
         balance = self.get_balance()
         free = balance['free']
-        margin = free * (POSITION_SIZE_PCT / 100)
+        margin = free * (POSITION_SIZE_PCT / 100) * reduction_factor
 
         if margin < 5:
             return 0, 0
@@ -235,7 +257,7 @@ class PortfolioManager:
 
         return amount, round(margin, 2)
 
-    def register_position(self, signal: dict, amount: float, margin: float) -> Position:
+    async def register_position(self, signal: dict, amount: float, margin: float) -> Position:
         """Yeni pozisyonu kaydet"""
         pos = Position(
             symbol=signal['symbol'],
@@ -251,12 +273,12 @@ class PortfolioManager:
             entry_score=signal.get('score', 0),
         )
         self.positions[signal['symbol']] = pos
+        await redis_client.hset("bot:positions", signal['symbol'], pos.to_dict())
         logger.info(f"📋 Pozisyon kayıtlı: {pos} | Giriş Skoru: {pos.entry_score}")
         return pos
 
-    def close_position(self, symbol: str, result: str, pnl_usd: float):
+    async def close_position(self, symbol: str, result: str, pnl_usd: float):
         """Pozisyonu kapat ve istatistik güncelle"""
-        # Önce senkronizasyon yap ki hayaletse hata vermesin
         if symbol not in self.positions:
             logger.warning(f"⚠️ Kapatılmaya çalışılan pozisyon hafızada yok: {symbol}")
             return
@@ -274,12 +296,18 @@ class PortfolioManager:
 
             if losses >= COIN_BLACKLIST_AFTER:
                 from datetime import timedelta
-                cooldown_minutes = COIN_BLACKLIST_CANDLES * 15  # 15m timeframe
+                cooldown_minutes = COIN_BLACKLIST_CANDLES * 15
                 self.coin_cooldowns[symbol] = datetime.now(timezone.utc) + timedelta(minutes=cooldown_minutes)
                 self.coin_consecutive_losses[symbol] = 0
                 logger.warning(f"🚫 {symbol} blacklist'e alındı ({cooldown_minutes} dk)")
 
         del self.positions[symbol]
+        await redis_client.hdel("bot:positions", symbol)
+        
+        # Stats güncelle
+        stats = self._get_sync_stats()
+        await redis_client.set("bot:stats", stats)
+        
         logger.info(f"🗑️ Pozisyon silindi: {symbol} | {result} | PnL: ${pnl_usd:+.2f}")
 
     def get_stats(self) -> dict:

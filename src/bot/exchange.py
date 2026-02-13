@@ -251,13 +251,23 @@ class ExchangeClient:
                 self.exchange.load_markets()
             
             market = self.exchange.market(symbol)
-            limits = {
-                'min_qty': float(market['limits']['amount']['min']),
-                'max_qty': float(market['limits']['amount']['max']),
+            info = market.get('info', {})
+            filters = info.get('filters', [])
+            
+            # Varsayılan limitler
+            min_qty = float(market['limits']['amount']['min'] or 0)
+            max_qty = float(market['limits']['amount']['max'] or float('inf'))
+            
+            # Binance'e özel MARKET_LOT_SIZE kontrolü (Market emirleri için daha sıkı olabilir)
+            for f in filters:
+                if f.get('filterType') == 'MARKET_LOT_SIZE':
+                    max_qty = float(f.get('maxQty', max_qty))
+                    break
+            
+            return {
+                'min_qty': min_qty,
+                'max_qty': max_qty,
             }
-            # Debug için limitleri gör
-            # logger.info(f"⚖️ {symbol} Limitleri: {limits}")
-            return limits
         except Exception as e:
             logger.warning(f"⚠️ Market limitleri alınamadı {symbol}: {e}")
             return {'min_qty': 0.0, 'max_qty': float('inf')}

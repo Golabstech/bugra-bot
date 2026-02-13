@@ -76,6 +76,12 @@ OHLCV_LIMIT = int(os.getenv("OHLCV_LIMIT", "100"))
 TOP_COINS_COUNT = int(os.getenv("TOP_COINS_COUNT", "100"))
 
 # ==========================================
+# 📊 REDIS & ALTYAPI
+# ==========================================
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+BOT_ROLE = os.getenv("BOT_ROLE", "worker") # worker | api
+
+# ==========================================
 # 📋 LOGLAMA
 # ==========================================
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")

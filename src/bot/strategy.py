@@ -260,6 +260,26 @@ def generate_signal(df: pd.DataFrame, symbol: str, include_all: bool = False, fu
              is_valid = False
              filter_reason = "GodCandle"
              if not include_all: return None
+
+        # 5. Kırmızı Mum Doğrulaması (Bearish Confirmation)
+        # Son mum kırmızı olmalı (Close < Open) → Satıcılar geldi teyidi
+        # Yeşil mumda short açmak = "dönüşü tahmin etmek", kırmızı mumda = "dönüşü teyit etmek"
+        last_is_red = float(last['close']) < float(last['open'])
+        prev_is_green = float(prev['close']) > float(prev['open'])
+        
+        if not last_is_red:
+            # Son mum hala yeşil — satıcılar henüz gelmemiş
+            is_valid = False
+            filter_reason = "NoRedCandle"
+            if not include_all: return None
+        
+        # BONUS: Eğer önceki yeşil mumdan sonra hacimli kırmızı mum geldiyse → ekstra güvence
+        if last_is_red and prev_is_green:
+            prev_vol = float(prev['volume']) if float(prev['volume']) > 0 else 1
+            vol_confirmation = float(last['volume']) / prev_vol
+            if vol_confirmation >= 0.7:
+                score += 10  # Hacimli kırmızı mum = güçlü dönüş sinyali
+                reasons.append("RedConfirm")
              
         # 4. Funding Rate Filtresi (Kalabalık Göstergesi)
         # Pozitif FR = Herkes long → Short kontrarian avantaj (+puan)

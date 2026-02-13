@@ -9,6 +9,8 @@ from .exchange import ExchangeClient
 from .strategy import generate_signal, calculate_indicators
 from .config import TIMEFRAME, OHLCV_LIMIT, TOP_COINS_COUNT
 
+from .redis_client import redis_client
+
 logger = logging.getLogger("scanner")
 
 
@@ -99,7 +101,7 @@ class MarketScanner:
             logger.debug(f"⚠️ {symbol} tarama hatası: {e}")
             return None
 
-    def scan_all(self) -> list[dict]:
+    async def scan_all(self) -> list[dict]:
         """Tüm coinleri tara, sinyalleri topla ve en iyi adayları göster"""
         self.refresh_symbols()
         signals = []
@@ -115,12 +117,16 @@ class MarketScanner:
 
             # Rate limit koruması
             if (i + 1) % 15 == 0:
-                time.sleep(0.3)
+                import asyncio
+                await asyncio.sleep(0.3)
 
         # Tüm adayları skora göre sırala
         all_candidates.sort(key=lambda s: s['score'], reverse=True)
         
-        # En iyi 5 adayı terminalde göster (Sinyal olmasa bile)
+        # Redis'e kaydet (API için)
+        await redis_client.set("bot:candidates", all_candidates[:10])
+        
+        # En iyi 5 adayı terminalde göster
         logger.info("📋 --- EN İYİ 5 ADAY ---")
         for cand in all_candidates[:5]:
             status = "✅ GEÇERLİ" if cand['is_valid'] else f"🚫 {cand['filter_reason']}"
