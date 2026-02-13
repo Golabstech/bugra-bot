@@ -1,5 +1,32 @@
 # 📋 CHANGELOG - Crypto Trading Bot
 
+## [v2.2.0] - 2026-02-13
+
+### 🚀 Dinamik Bollinger TP & Altyapı İyileştirmeleri
+
+#### 🎯 Dinamik Kâr Al (TP) Stratejisi
+
+- **Bollinger Band TP:** Sabit R:R oranları yerine piyasa volatilitesine uyumlu Bollinger bantları hedef alındı.
+  - **TP1 (Mid):** Fiyat Bollinger Orta Bandına (SMA20) değdiğinde %40 kapanış + Breakeven (Girişe Stop).
+  - **TP2 (Low/High):** Fiyat diğer banda değdiğinde %30 kapanış + Kâr Kilitleme.
+- **BB R:R Guard:** TP1 hedefi (BB Mid), Stop-Loss riskinin en az yarısını (%50 R:R) karşılamıyorsa sinyal reddedilir (`BB_RR` filtresi).
+
+#### 🧠 Strateji & Skorlama Rafinesia
+
+- **ADX Double-Count Fix:** ADX'in düşük ve yüksek trend durumlarında mükerrer puan alması engellendi. Trend gücü 3 net bölgeye (Low, Mid, High) ayrılarak daha tutarlı skorlama sağlandı.
+- **Kırmızı Mum Doğrulaması:** Short işlemlerde sadece aşırı şişme değil, satıcıların geldiğini teyit eden "Kırmızı Mum" şartı zorunlu hale getirildi (Confirm over Guess).
+
+#### 🛡️ Portföy & Risk Yönetimi
+
+- **Zaman Bazlı Çıkış (Time Exit):** 48 saat boyunca hedefe ulaşmayan "bayat" pozisyonlar, funding drain ve ölü sermaye riskine karşı otomatik kapatılır.
+- **Net PnL (Fee Included):** Tüm PnL hesaplamalarına giriş ve çıkış borsa komisyonları (Taker Fee) dahil edildi. Telegram bildirimleri artık gerçek net kârlılığı gösterir.
+- **Trailing Stop Fix:** Pozisyon güncellemeleri sırasında state kaybına yol açan `register_position` hatası giderildi.
+
+#### 🧹 Docker & Altyapı
+
+- **Northflank Support:** Docker ve Docker-Compose yapılandırması tamamlandı. Northflank platformunda Redis desteği ile bulut kurulumuna hazır hale getirildi.
+- **Auto-Sync Engine:** Borsa ve bot hafızası arasındaki pozisyon senkronizasyonu mükemmelleştirildi.
+
 ## [v2.1.0] - 2026-02-12
 
 ### 🚀 Gelişmiş Strateji & Risk Yönetimi

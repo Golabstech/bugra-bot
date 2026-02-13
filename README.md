@@ -113,29 +113,31 @@ Tüm ayarlar `.env` dosyasından veya `src/bot/config.py` varsayılanlarından o
 │  1. Portföy Senkronizasyonu & Temizlik      │
 │     (Yetim emirleri temizle, bakiye eşle)   │
 │  2. Açık pozisyonları kontrol et            │
-│     (TP/SL + 🧠 Signal Decay Exit)          │
+│     (TP/SL + 🧠 Decay + ⏰ Time Exit)       │
 │  3. Top 100 coin'i tara + Funding Rate      │
-│  4. Sinyal üret (Skor + FR + Filtreler)     │
+│  4. Sinyal üret (Skor + BB R:R + Filtreler) │
 │  5. Risk kontrolü geç → İnatçı Emir (Retry) │
-│  6. SL (Borsada), TP (Yazılımsal) ayarla    │
-│  7. Telegram bildirimi gönder               │
+│  6. SL (Borsada), TP (Dinamik Bollinger)     │
+│  7. Telegram bildirimi gönder (Net PnL)     │
 │                                             │
 │  🛡️ God Candle & Volume Surge Koruması      │
-│  📈 TP1 → Breakeven SL (%40 Kapat)          │
-│  📈 TP2 → Trailing SL (%30 Kapat)           │
+│  🎯 TP1 → Bollinger Mid (%40 + BE SL)       │
+│  🎯 TP2 → Bollinger Low/High (%30 + Trailing)│
 │  📊 TP3 → Tam Kapanış (%30)                 │
 └─────────────────────────────────────────────┘
 ```
 
 ---
 
-## 🚀 Öne Çıkan Özellikler (v2.1.0)
+## 🚀 Öne Çıkan Özellikler (v2.2.0)
 
-- **🧠 Signal Decay Exit:** Sinyal gücünü kaybederse (hype biterse) ve kârdaysak otomatik erken çıkış.
-- **📊 Funding Rate Alpha:** Piyasa kalabalığını (sentiment) ölçerek ters yönlü (contrarian) işlem avantajı.
-- **🛡️ Parabolik Koruma:** God Candle ve Volume Surge filtreleri ile "squeeze" hareketlerine karşı kalkan.
-- **🧹 Hibrit TP/SL:** Stop loss borsada (pozisyona bağlı), Take profit'ler yazılımsal yönetimde ( Orphan order sıfırlandı).
+- **🎯 Dinamik Bollinger TP:** Sabit yüzdeler yerine piyasa volatilitesine göre Bollinger bantları (Mid/Low) üzerinden kâr alma.
+- **�️ BB R:R Guard:** Bollinger TP hedefi SL riskini karşılamıyorsa (`R:R < 0.5`) işlemi otomatik filtreleme.
+- **⏰ Zaman Bazlı Çıkış (Time Exit):** 48 saat boyunca hedefe gitmeyen pozisyonları kapatarak sermaye bağlamasını ve funding kaybını önleme.
+- **🧠 Rafine ADX Skorlama:** ADX trend gücünü 3 ana bölgeye ayırarak double-count bug'ını gideren ve daha doğru sinyal üreten mantık.
+- **💸 Net PnL (Fee Included):** Tüm kâr/zarar bildirimlerine borsa komisyonlarını (Taker fee) dahil eden gerçekçi raporlama.
 - **💪 İnatçı Emir (Retry):** Borsa limitlerine takılan emirlerde otomatik miktar küçültme ve yeniden deneme.
+- **🧹 Auto-Sync & Docker:** Borsayla tam senkronizasyon ve Docker/Northflank bulut kurulum desteği.
 
 ---
 
