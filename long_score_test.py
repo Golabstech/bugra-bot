@@ -1,3 +1,10 @@
+"""
+Long Score Test
+Dosya: long_score_test.py
+Tarih: 12 Şubat 2026
+Açıklama: Long skorlama mantığını simüle edilmiş BTC düşüş trendi verisiyle
+          test eden birim test scripti.
+"""
 import pandas as pd
 import pandas_ta as ta
 from datetime import datetime
