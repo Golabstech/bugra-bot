@@ -8,6 +8,7 @@ from .portfolio import PortfolioManager
 from . import notifier
 from .config import (
     STRATEGY_SIDE, TP1_CLOSE_PCT, TP2_CLOSE_PCT, TP3_CLOSE_PCT,
+    ENABLE_FLIP_STRATEGY, FLIP_TP1_PCT, FLIP_TP2_PCT, FLIP_SL_PCT,
 )
 
 logger = logging.getLogger("trader")
@@ -109,10 +110,14 @@ class TradeManager:
 
     async def _check_signal_decay(self, pos, current_price: float, scanner):
         """
-        🧠 SİNYAL ÇÜRÜMESI KONTROLÜ
+        🧠 UYARLANABİLİR POZİSYON YÖNETİMİ (Artık sadece decay değil, risk yönetimi)
+        1. Skor Artarsa (ratio > 1.2): Short Squeeze riski -> Erken kaç!
+        2. Skor Düşerse (ratio < 0.4) + Karşılık: Stopu girişe çek (Trailing Stop active).
+        3. Skor Düşerse (ratio < 0.4) + Zarar: Enerjisi bitti -> Vakit kaybı çıkışı.
         """
         symbol = pos.symbol
         
+        # 'Recovered' durumundaki manuel işlemler veya özel durumlar için atla
         if 'Recovered' in pos.reasons:
             return
         
@@ -127,18 +132,53 @@ class TradeManager:
         if entry_score <= 0:
             return
         
-        decay_ratio = current_score / entry_score
+        # Skor değişim oranı
+        ratio = current_score / entry_score
         
+        # Mevcut PnL durumu
         if pos.side == 'SHORT':
             pnl_pct = ((pos.entry_price - current_price) / pos.entry_price) * 100
         else:
             pnl_pct = ((current_price - pos.entry_price) / pos.entry_price) * 100
         
-        logger.debug(f"📊 {symbol} Decay: Giriş={entry_score} → Şimdi={current_score} ({decay_ratio:.0%}) | PnL: {pnl_pct:+.2f}%")
-        
-        if decay_ratio < 0.40 and pnl_pct > 0.3:
-            logger.info(f"🧠 SIGNAL DECAY: {symbol} | Skor {entry_score} → {current_score} ({decay_ratio:.0%}) | PnL: {pnl_pct:+.2f}% | Kârı al!")
-            await self._close_full(pos, "DECAY_EXIT", current_price)
+        logger.debug(f"📊 {symbol} Mantık Kontrol: Giriş={entry_score} → Şimdi={current_score} ({ratio:.0%}) | PnL: {pnl_pct:+.2f}%")
+
+        # ---------------------------------------------------------------------
+        # DURUM 1: SKOR ARTIYOR (SHORT SQUEEZE RİSKİ)
+        # ---------------------------------------------------------------------
+        # Girdikten sonra skor %20'den fazla arttıysa, bu coin hype kazanmaya devam ediyor demektir.
+        # Short işlemde bu tehlikelidir. Stop-loss patlamadan güvenli tahliye.
+        if ratio > 1.25 and pnl_pct < -0.5:
+             logger.warning(f"🚨 SQUEEZE ALERT: {symbol} | Skor yükseliyor {entry_score} -> {current_score} ({ratio:.0%}) | Trend karşıya dönmüş olabilir, kaç!")
+             await self._close_full(pos, "SQUEEZE_EXIT", current_price)
+             
+             # 🔄 FLIP: Hemen ters yönde Long açmayı dene
+             if ENABLE_FLIP_STRATEGY:
+                 await self._execute_flip_trade(symbol, "LONG", current_price, current_score)
+             return
+
+        # ---------------------------------------------------------------------
+        # DURUM 2: SKOR DÜŞÜYOR (HYPE BİTİYOR)
+        # ---------------------------------------------------------------------
+        if ratio < 0.40:
+            # A) POZİSYON KÂRDA (%0.5+) -> Kârı erkenden ALMA, Stop-Loss'u GİRİŞE çek.
+            if pnl_pct > 0.5:
+                # Sadece eğer stop henüz girişe çekilmediyse
+                if (pos.side == 'SHORT' and pos.sl > pos.entry_price) or \
+                   (pos.side == 'LONG' and pos.sl < pos.entry_price):
+                    
+                    logger.info(f"🛡️ TRAILING STOP: {symbol} | Skor düştü {current_score:.0f}, kâr korumaya alınıyor (BE).")
+                    pos.sl = pos.entry_price # Stopu girişe çek
+                    self.exchange.cancel_all_orders(symbol)
+                    self.exchange.set_stop_loss(symbol, pos.side, pos.sl)
+                    # Portfolio objesini güncelle
+                    await self.portfolio.register_position(pos.to_dict(), pos.amount, pos.margin)
+            
+            # B) POZİSYON ZARARDA VEYA YATAY -> Zaman kaybı yapma, çık.
+            elif pnl_pct < 0.2:
+                logger.info(f"⏳ VAKİT KAYBI: {symbol} | Skor sönümlendi {current_score:.0f} ve gelişme yok. Çıkılıyor.")
+                await self._close_full(pos, "DECAY_EXIT", current_price)
+
 
     async def _check_tp_sl(self, pos, current_price: float):
         """Yazılımsal TP/SL kontrolü"""
@@ -221,3 +261,47 @@ class TradeManager:
         if pos.side == 'SHORT':
             return ((pos.entry_price - exit_price) / pos.entry_price) * 100
         return ((exit_price - pos.entry_price) / pos.entry_price) * 100
+
+    async def _execute_flip_trade(self, symbol: str, side: str, price: float, score: int):
+        """
+        🚀 FLIP TRADE (Ters Yüz İşlemi)
+        Hızlı bir sinyal oluşturup execute_signal'e paslar.
+        """
+        logger.info(f"🔄 FLIP STRATEGY TETİKLENDİ: {symbol} yön {side} olarak değişiyor!")
+        
+        # Vur-Kaç SL/TP ayarları
+        risk_pct = FLIP_SL_PCT / 100
+        tp1_pct = FLIP_TP1_PCT / 100
+        tp2_pct = FLIP_TP2_PCT / 100
+        
+        if side == 'LONG':
+            sl = price * (1 - risk_pct)
+            tp1 = price * (1 + tp1_pct)
+            tp2 = price * (1 + tp2_pct)
+            tp3 = price * (1 + (tp2_pct * 1.5)) # TP3 biraz daha uzak
+        else: # Genelde short'tan long'a flip olacağı için burası yedek
+            sl = price * (1 + risk_pct)
+            tp1 = price * (1 - tp1_pct)
+            tp2 = price * (1 - tp2_pct)
+            tp3 = price * (1 - (tp2_pct * 1.5))
+
+        flip_signal = {
+            'symbol': symbol,
+            'side': side,
+            'score': score,
+            'reasons': ['FLIP_SQUEEZE'],
+            'entry_price': price,
+            'sl': round(sl, 6),
+            'tp1': round(tp1, 6),
+            'tp2': round(tp2, 6),
+            'tp3': round(tp3, 6),
+            'atr': 0, # Flip'te ATR yerine yüzde bazlı gidiyoruz
+            'is_valid': True
+        }
+        
+        # 1 saniye bekle (Borsanın önceki emri tamamen temizlemesine izin ver)
+        import asyncio
+        await asyncio.sleep(1)
+        
+        # Yeni pozisyonu aç
+        await self.execute_signal(flip_signal)

@@ -67,6 +67,12 @@ TP3_RR = float(os.getenv("TP3_RR", "4.0"))          # 4.5 -> 4.0
 SIGNAL_DECAY_THRESHOLD = 20    # Skor bu değerin altına düşerse tahliye et (25 -> 20: Daha Sabırlı)
 SIGNAL_DECAY_GRACE_PERIOD = 4  # İlk 4 mumda tahliye yapma (gürültü koruması)
 
+# 🔄 FLIP STRATEGY (Squeeze sonrası ters işlem)
+ENABLE_FLIP_STRATEGY = os.getenv("ENABLE_FLIP", "true").lower() == "true"
+FLIP_TP1_PCT = 1.2  # %1.2 kârda ilk çıkış
+FLIP_TP2_PCT = 3.0  # %3.0 kârda tam çıkış
+FLIP_SL_PCT = 2.0   # %2.0 stop
+
 # ==========================================
 # ⏱️ TARAMA AYARLARI
 # ==========================================
