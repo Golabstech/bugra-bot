@@ -9,7 +9,7 @@ from . import notifier
 from .config import (
     STRATEGY_SIDE, TP1_CLOSE_PCT, TP2_CLOSE_PCT, TP3_CLOSE_PCT,
     ENABLE_FLIP_STRATEGY, FLIP_TP1_PCT, FLIP_TP2_PCT, FLIP_SL_PCT,
-    TAKER_FEE,
+    TAKER_FEE, TP1_SL_RETRACE,
 )
 
 logger = logging.getLogger("trader")
@@ -128,9 +128,8 @@ class TradeManager:
 
 
     async def _check_signal_decay(self, pos, current_price: float, signal: dict):
-        """
-        🧠 UYARLANABİLİR POZİSYON YÖNETİMİ
-        """
+        """v4.0 optimize: Signal Decay devre dışı bırakıldı"""
+        return
         symbol = pos.symbol
         
         # 'Recovered' durumundaki manuel işlemler veya özel durumlar için atla
@@ -197,10 +196,6 @@ class TradeManager:
         symbol = pos.symbol
         side = pos.side
         
-        # Dinamik hedefler (Bollinger)
-        bb_mid = signal['bb_middle'] if signal else pos.tp1
-        bb_low = signal['bb_lower'] if signal else pos.tp2
-
         if side == 'SHORT':
             is_stopped = current_price >= pos.sl
         else:
@@ -210,9 +205,9 @@ class TradeManager:
             await self._close_full(pos, "STOP LOSS", current_price)
             return
 
-        # TP1 kontrolü (Hedef: Orta Bant - SMA20)
+        # TP1 kontrolü (Hedef: ATR TP1)
         if not pos.tp1_hit:
-            is_tp1 = (current_price <= bb_mid) if side == 'SHORT' else (current_price >= bb_mid)
+            is_tp1 = (current_price <= pos.tp1) if side == 'SHORT' else (current_price >= pos.tp1)
             if is_tp1:
                 pos.tp1_hit = True
                 tp1_amount = self.exchange.sanitize_amount(symbol, pos.initial_amount * TP1_CLOSE_PCT)
@@ -220,47 +215,52 @@ class TradeManager:
                     self.exchange.close_position(symbol, side, tp1_amount)
                     pos.amount -= tp1_amount
 
-                logger.info(f"🎯 TP1 HIT (Bollinger Mid): {symbol} @ {current_price} | Kalan: {pos.amount}")
+                # Stopu YARIYA çek (v4.0 optimize: %50 Retrace)
+                # Yeni SL = Entry + (Eski SL - Entry) * Retrace
+                risk = pos.sl - pos.entry_price
+                pos.sl = pos.entry_price + (risk * TP1_SL_RETRACE)
                 
-                # Stopu girişe çek (BE)
+                logger.info(f"🎯 TP1 HIT: {symbol} @ {current_price} | Yeni SL: {pos.sl:.2f}")
+                
                 self.exchange.cancel_all_orders(symbol)
-                pos.sl = pos.entry_price
                 self.exchange.set_stop_loss(symbol, side, pos.sl)
                 
                 from .redis_client import redis_client
                 await redis_client.hset("bot:positions", symbol, pos.to_dict())
+                
                 pnl_pct = self._calc_pnl_pct(pos, current_price)
-                notifier.notify_trade_close(symbol, "TP1", pnl_pct, 0)
+                realized_pnl_usd = (pos.initial_amount * TP1_CLOSE_PCT) * pos.entry_price * (pnl_pct/100)
+                notifier.notify_trade_close(symbol, "TP1", pnl_pct, realized_pnl_usd)
 
-        # TP2 kontrolü (Hedef: Diğer Bant)
+        # TP2 kontrolü (Hedef: ATR TP2)
         elif not pos.tp2_hit:
-            is_tp2 = (current_price <= bb_low) if side == 'SHORT' else (current_price >= bb_low)
+            is_tp2 = (current_price <= pos.tp2) if side == 'SHORT' else (current_price >= pos.tp2)
             if is_tp2:
                 pos.tp2_hit = True
                 tp2_amount = self.exchange.sanitize_amount(symbol, pos.initial_amount * TP2_CLOSE_PCT)
                 if tp2_amount > 0:
                     self.exchange.close_position(symbol, side, tp2_amount)
                     pos.amount -= tp2_amount
-
-                logger.info(f"🎯 TP2 HIT (Bollinger Low): {symbol} @ {current_price} | Kalan: {pos.amount}")
-
+                
+                logger.info(f"🎯 TP2 HIT: {symbol} @ {current_price} | SL Girişe (BE) çekildi.")
+                
+                # SL'i GİRİŞE çek (TP2'den sonra artık risk yok)
+                pos.sl = pos.entry_price
                 self.exchange.cancel_all_orders(symbol)
-                # SL'i TP1 seviyesine çekerek kârı kilitle
-                if side == 'SHORT':
-                    pos.sl = pos.entry_price - (pos.entry_price - bb_mid) * 0.5
-                else:
-                    pos.sl = pos.entry_price + (bb_mid - pos.entry_price) * 0.5
                 self.exchange.set_stop_loss(symbol, side, pos.sl)
-
+                
                 from .redis_client import redis_client
                 await redis_client.hset("bot:positions", symbol, pos.to_dict())
+                
                 pnl_pct = self._calc_pnl_pct(pos, current_price)
-                notifier.notify_trade_close(symbol, "TP2", pnl_pct, 0)
+                realized_pnl_usd = (pos.initial_amount * TP2_CLOSE_PCT) * pos.entry_price * (pnl_pct/100)
+                notifier.notify_trade_close(symbol, "TP2", pnl_pct, realized_pnl_usd)
 
+        # TP3 kontrolü (Hedef: ATR TP3)
         else:
-            # TP3 Kalanı sömür (Sabit TP3 fiyatı veya daha uzak bir hedef)
             is_tp3 = (current_price <= pos.tp3) if side == 'SHORT' else (current_price >= pos.tp3)
             if is_tp3:
+                logger.info(f"💰 TP3 HIT: {symbol} @ {current_price} | Pozisyon Kapatılıyor.")
                 await self._close_full(pos, "TP3", current_price)
 
     async def _close_full(self, pos, result: str, price: float):

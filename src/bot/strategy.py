@@ -307,17 +307,16 @@ def generate_signal(df: pd.DataFrame, symbol: str, include_all: bool = False, fu
         filter_reason = "Score"
         if not include_all: return None
 
-    # SL / TP hesapla
+    # SL / TP hesapla (v4.0 optimize: ATR bazlı sabit hedefler)
     risk = atr * SL_ATR_MULT
-    if side == 'SHORT':
-        sl = price + risk
-        tp1 = price - (risk * TP1_RR)
-        tp2 = price - (risk * TP2_RR)
-        tp3 = price - (risk * TP3_RR)
+    sl = price + risk
+    tp1 = price - (risk * TP1_RR)
+    tp2 = price - (risk * TP2_RR)
+    tp3 = price - (risk * TP3_RR)
 
-        # R:R Kontrolü: BB Mid hedefi SL riskinin en az yarısını karşılamalı
-        bb_mid_distance = price - float(last['bb_middle'])
-        if bb_mid_distance < risk * 0.5 and is_valid:
+    # R:R Kontrolü: BB Mid hedefi SL riskinin en az yarısını karşılamalı
+    bb_mid_distance = price - float(last['bb_middle'])
+    if bb_mid_distance < risk * 0.5 and is_valid:
             is_valid = False
             filter_reason = "BB_RR"
             if not include_all: return None
