@@ -149,21 +149,38 @@ class PortfolioManager:
                     logger.info(f"🆕 Borsada tespit edilen mevcut pozisyon içe aktarılıyor: {symbol}")
                     raw_amt = float(pos_data['info'].get('positionAmt', 0))
                     side = 'SHORT' if raw_amt < 0 else 'LONG'
-
                     entry_price = float(pos_data.get('entryPrice', 0))
                     amount = float(pos_data.get('contracts', 0))
-                    # Tahmini marjin hesapla (PnL hesaplamaları için gerekli)
-                    estimated_margin = (amount * entry_price) / LEVERAGE
+                    # Tahmini marjin hesapla
+                    margin = (amount * entry_price) / LEVERAGE
                     
+                    # Hedefleri gerçek giriş fiyatına göre oluştur (Eksikse)
+                    from .strategy import TradingStrategy
+                    strat = TradingStrategy()
+                    # Tipik bir ATR bulamazsak %2-4-6 TP ve %1.5 SL kullan
+                    if side == 'LONG':
+                        tp1, tp2, tp3 = entry_price * 1.02, entry_price * 1.04, entry_price * 1.06
+                        sl = entry_price * 0.985
+                    else:
+                        tp1, tp2, tp3 = entry_price * 0.98, entry_price * 0.96, entry_price * 0.94
+                        sl = entry_price * 1.015
+
                     new_pos = Position(
-                        symbol=symbol, side=side, 
-                        entry_price=entry_price,
-                        amount=amount,
-                        margin=estimated_margin, sl=float('inf') if side == 'SHORT' else 0.0,
-                        tp1=0.0, tp2=0.0, tp3=0.0, reasons=['Recovered']
+                        symbol=symbol, side=side, entry_price=entry_price,
+                        amount=amount, margin=margin, sl=sl,
+                        tp1=tp1, tp2=tp2, tp3=tp3, reasons=["Borsadan senkronize"]
                     )
                     self.positions[symbol] = new_pos
                     await redis_client.hset("bot:positions", symbol, new_pos.to_dict())
+                else:
+                    # Mevcut pozisyonun fiyatını borsadan doğrula (Slippage veya manuel müdahale için)
+                    current_pos = self.positions[symbol]
+                    exch_entry = float(pos_data.get('entryPrice', 0))
+                    if exch_entry > 0 and abs(current_pos.entry_price - exch_entry) / exch_entry > 0.005:
+                        logger.warning(f"⚖️ {symbol} Giriş fiyatı borsadan güncelleniyor: {current_pos.entry_price} -> {exch_entry}")
+                        current_pos.entry_price = exch_entry
+                        # TP/SL hedefleri de güncellenmeli (opsiyonel ama sağlıklı)
+                        await redis_client.hset("bot:positions", symbol, current_pos.to_dict())
             
             # 5. Yetim Emir Temizliği
             active_syms = set(self.positions.keys()) | exchange_symbols
