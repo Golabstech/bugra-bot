@@ -75,6 +75,20 @@ class MarketScanner:
             if quote_vol < MIN_24H_VOLUME: 
                 continue
             
+            # 4. Status Kontrolü (Sadece aktif işlem görenleri al)
+            # Not: Ticker verisinden status gelmeyebilir, exchange.markets'tan doğrulanabilir
+            if not self.exchange.exchange.markets:
+                self.exchange.exchange.load_markets(reload=True)
+            
+            market_info = self.exchange.exchange.markets.get(symbol)
+            if market_info:
+                # Hem active bayrağını hem de Binance'in status (TRADING) değerini kontrol et
+                active = market_info.get('active', True)
+                status = market_info.get('info', {}).get('status', 'TRADING')
+                
+                if not active or status != 'TRADING':
+                    continue
+            
             top_coins.append(symbol)
             if len(top_coins) >= limit:
                 break
@@ -123,7 +137,7 @@ class MarketScanner:
         if signals:
             logger.info(f"🎯 {len(signals)} MOMENTUM SİNYALİ BULUNDU!")
             for sig in signals:
-                logger.info(f"✅ {sig['symbol']}: {sig['action']} | {sig['reason']}")
+                logger.info(f"✅ {sig['symbol']}: {sig['side']} | {sig['reason']}")
         else:
             logger.info("🔍 Kriterlere uygun momentum hareketi bulunamadı.")
 

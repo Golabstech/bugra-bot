@@ -130,6 +130,12 @@ class ExchangeClient:
     def set_stop_loss(self, symbol: str, side: str, stop_price: float, amount: float = 0) -> dict | None:
         """Stop loss emri koy (Pozisyona bağlı — closePosition)"""
         try:
+            # Önce varsa semboldeki tüm SL/TP emirlerini temizle (Çakışmayı önlemek için)
+            # Binance tek bir yönde sadece bir closePosition=True emrine izin verir
+            self.cancel_all_orders(symbol)
+            import time
+            time.sleep(0.1) # Borsa motoruna vakit tanı
+            
             sl_side = 'buy' if side == 'SHORT' else 'sell'
             order = self.exchange.create_order(
                 symbol, 'stop_market', sl_side, None,
@@ -141,7 +147,10 @@ class ExchangeClient:
             logger.info(f"🛑 SL ayarlandı: {symbol} @ {stop_price} (Pozisyona bağlı)")
             return order
         except Exception as e:
-            logger.error(f"❌ SL ayarlanamadı {symbol}: {e}")
+            if "code\":-4130" in str(e):
+                logger.warning(f"⚠️ {symbol} SL zaten ayarlı veya çakışma var: {e}")
+            else:
+                logger.error(f"❌ SL ayarlanamadı {symbol}: {e}")
             return None
 
     def set_take_profit(self, symbol: str, side: str, tp_price: float, amount: float) -> dict | None:
@@ -217,7 +226,10 @@ class ExchangeClient:
         try:
             return self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
         except Exception as e:
-            logger.error(f"❌ OHLCV alınamadı {symbol}: {e}")
+            if "Invalid symbol status" in str(e) or "code\":-1122" in str(e):
+                logger.warning(f"⚠️ {symbol} şu an işlem görmüyor (Invalid Status)")
+            else:
+                logger.error(f"❌ OHLCV alınamadı {symbol}: {e}")
             return []
 
     def fetch_ticker(self, symbol: str) -> dict | None:

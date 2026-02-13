@@ -9,7 +9,7 @@ from datetime import datetime
 from bot.redis_client import redis_client
 from bot.config import LOG_LEVEL
 
-app = FastAPI(title="Bugra-Bot API", version="2.2.0")
+app = FastAPI(title="Bugra-Bot API", version="3.0.0")
 
 # --- Modeller ---
 class PositionModel(BaseModel):

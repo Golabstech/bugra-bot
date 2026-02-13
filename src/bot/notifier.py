@@ -18,7 +18,7 @@ async def _send_async(text: str, parse_mode: str = "HTML"):
         return
 
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with httpx.AsyncClient(timeout=15.0) as client:
             await client.post(
                 f"{_BASE_URL}/sendMessage",
                 json={
@@ -29,7 +29,7 @@ async def _send_async(text: str, parse_mode: str = "HTML"):
                 },
             )
     except Exception as e:
-        logger.error(f"❌ Telegram hatası: {e}")
+        logger.error(f"❌ Telegram hatası: {e}", exc_info=True)
 
 
 def send(text: str):

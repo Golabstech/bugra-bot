@@ -150,11 +150,16 @@ class PortfolioManager:
                     raw_amt = float(pos_data['info'].get('positionAmt', 0))
                     side = 'SHORT' if raw_amt < 0 else 'LONG'
 
+                    entry_price = float(pos_data.get('entryPrice', 0))
+                    amount = float(pos_data.get('contracts', 0))
+                    # Tahmini marjin hesapla (PnL hesaplamaları için gerekli)
+                    estimated_margin = (amount * entry_price) / LEVERAGE
+                    
                     new_pos = Position(
                         symbol=symbol, side=side, 
-                        entry_price=float(pos_data.get('entryPrice', 0)),
-                        amount=float(pos_data.get('contracts', 0)),
-                        margin=0.0, sl=float('inf') if side == 'SHORT' else 0.0,
+                        entry_price=entry_price,
+                        amount=amount,
+                        margin=estimated_margin, sl=float('inf') if side == 'SHORT' else 0.0,
                         tp1=0.0, tp2=0.0, tp3=0.0, reasons=['Recovered']
                     )
                     self.positions[symbol] = new_pos

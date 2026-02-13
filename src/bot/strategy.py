@@ -70,7 +70,9 @@ class Strategy:
 
         # SL / TP Hesaplama
         price = last_candle['close']
-        atr = last_candle['atr'] or (price * 0.01) # Default %1 if ATR fails
+        atr = last_candle['atr']
+        if pd.isna(atr):
+            atr = price * 0.01 # ATR oluşmamışsa %1 varsay
         
         risk = atr * SL_ATR_MULT
         

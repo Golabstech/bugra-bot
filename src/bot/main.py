@@ -42,7 +42,7 @@ async def main():
         sig.signal(sig.SIGTERM, _shutdown)
 
     logger.info("=" * 60)
-    logger.info("🤖 BUGRA-BOT v2.2.0 — Northflank Ready Engine")
+    logger.info("🤖 BUGRA-BOT v3.0.0 — Northflank Ready Engine")
     logger.info("=" * 60)
 
     # Redis bağlantısını başlat

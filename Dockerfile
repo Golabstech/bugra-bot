@@ -29,9 +29,11 @@ COPY . .
 # Set Python path to include src
 ENV PYTHONPATH=/app/src
 
-# Script to switch role
-RUN chmod +x scripts/entrypoint.sh
+# Fix CRLF line endings and set permissions
+RUN apt-get update && apt-get install -y --no-install-recommends sed && \
+    sed -i 's/\r$//' scripts/entrypoint.sh && \
+    chmod +x scripts/entrypoint.sh
 
 EXPOSE 8000
 
-ENTRYPOINT ["scripts/entrypoint.sh"]
+ENTRYPOINT ["/bin/bash", "/app/scripts/entrypoint.sh"]

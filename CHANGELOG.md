@@ -1,5 +1,26 @@
 # 📋 CHANGELOG - Crypto Trading Bot
 
+## [v3.0.0] - 2026-02-14
+
+### 🚀 Northflank & All-in-One Mimarisi
+- **Tek Konteyner Tasarımı:** Redis, Monitoring API ve Trading Worker tek bir Docker konteynerinde birleştirildi (Northflank kaynak tasarrufu için).
+- **FastAPI İzleme:** Bot durumunu (istatistikler, açık pozisyonlar, aday coinler) canlı takip etmek için API eklendi.
+- **Docker Optimizasyonu:** `Dockerfile` ve `entrypoint.sh` Linux/Windows uyumluluğu (LF temizliği) ve performans için güncellendi.
+
+### 🛠 Kritik Hata Düzeltmeleri
+- **KeyError (Sinyal Log):** Sinyal loglarında `action` yerine `side` kullanılarak botun çökmesi engellendi.
+- **NaN ATR Koruması:** ATR indikatörü oluşmamış coinlerde `%1` varsayılan değer kullanılarak `NaN` kaynaklı SL/TP hataları giderildi.
+- **Marjin Kurtarma:** Re-start sonrası borsadan çekilen pozisyonların marjin miktarı kaldıraca göre otomatik hesaplanarak PnL takibi düzeltildi.
+- **Binance -4130 (SL Çatışması):** TP1/TP2 sonrası yeni SL koymadan önce eski emirlerin temizlenmesi ve kısa bekleme süresi eklendi.
+- **Aktif Sembol Filtresi:** `BNXUSDT` gibi statüsü `TRADING` olmayan veya inaktif olan coinler tarama listesinden tamamen çıkarıldı.
+
+### 📈 Geliştirmeler
+- **Telegram Timeout:** Stabil olmayan bağlantılar için bildirim timeout süresi 15 saniyeye çıkarıldı.
+- **Debug Logları:** Telegram hataları için detaylı traceback eklenerek teşhis kolaylaştırıldı.
+- **Requirements:** Bağımlılıklar güncellendi ve `.venv` uyumluluğu sağlandı.
+
+---
+
 ## [v1.3.1] - 2026-02-11
 
 ### 🧪 SOL Agresif Backtest Testi
