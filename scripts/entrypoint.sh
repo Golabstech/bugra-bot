@@ -1,15 +1,13 @@
 #!/bin/bash
 set -e
 
-echo "🚀 Bugra-Bot Başlatılıyor — Rol: ${BOT_ROLE:-worker}"
+echo "🚀 Bugra-Bot All-in-One Mode başlatılıyor..."
 
-if [ "$BOT_ROLE" = "api" ]; then
-    echo "📡 Monitoring API (Uvicorn) başlatılıyor..."
-    exec uvicorn api.main:app --host 0.0.0.0 --port 8000
-else
-    echo "🧠 Redis Server (Background) başlatılıyor..."
-    redis-server --daemonize yes --protected-mode no --dir /data
-    
-    echo "🤖 Trading Worker başlatılıyor..."
-    exec python -m bot.main
-fi
+echo "🧠 Redis Server başlatılıyor..."
+redis-server --daemonize yes --protected-mode no --dir /data
+
+echo "📡 Monitoring API (Uvicorn) arka planda başlatılıyor..."
+uvicorn api.main:app --host 0.0.0.0 --port 8000 &
+
+echo "🤖 Trading Worker başlatılıyor..."
+exec python -m bot.main
