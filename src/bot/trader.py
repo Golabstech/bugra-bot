@@ -98,32 +98,29 @@ class TradeManager:
 
                 current_price = float(ticker['last'])
                 
-                # 1. Klasik TP/SL kontrolü
-                await self._check_tp_sl(pos, current_price)
+                # 🧠 Piyasa verilerini bir kez tara (BB ve Skor için)
+                latest_signal = None
+                if scanner:
+                    latest_signal = scanner.scan_symbol(symbol, include_all=True)
+
+                # 1. TP/SL kontrolü (Artık BB değerlerini kullanabilir)
+                await self._check_tp_sl(pos, current_price, latest_signal)
                 
-                # 2. Signal Decay Exit (Sinyal Çürümesi Çıkışı)
-                if scanner and pos.entry_score > 0:
-                    await self._check_signal_decay(pos, current_price, scanner)
+                # 2. Uyarlanabilir Pozisyon Yönetimi (Squeeze & BE)
+                if latest_signal and pos.entry_score > 0:
+                    await self._check_signal_decay(pos, current_price, latest_signal)
 
             except Exception as e:
                 logger.error(f"❌ {symbol} kontrol hatası: {e}")
 
-    async def _check_signal_decay(self, pos, current_price: float, scanner):
+    async def _check_signal_decay(self, pos, current_price: float, signal: dict):
         """
-        🧠 UYARLANABİLİR POZİSYON YÖNETİMİ (Artık sadece decay değil, risk yönetimi)
-        1. Skor Artarsa (ratio > 1.2): Short Squeeze riski -> Erken kaç!
-        2. Skor Düşerse (ratio < 0.4) + Karşılık: Stopu girişe çek (Trailing Stop active).
-        3. Skor Düşerse (ratio < 0.4) + Zarar: Enerjisi bitti -> Vakit kaybı çıkışı.
+        🧠 UYARLANABİLİR POZİSYON YÖNETİMİ
         """
         symbol = pos.symbol
         
         # 'Recovered' durumundaki manuel işlemler veya özel durumlar için atla
         if 'Recovered' in pos.reasons:
-            return
-        
-        # Güncel skoru hesapla
-        signal = scanner.scan_symbol(symbol, include_all=True)
-        if not signal:
             return
         
         current_score = signal.get('score', 0)
@@ -180,10 +177,14 @@ class TradeManager:
                 await self._close_full(pos, "DECAY_EXIT", current_price)
 
 
-    async def _check_tp_sl(self, pos, current_price: float):
-        """Yazılımsal TP/SL kontrolü"""
+    async def _check_tp_sl(self, pos, current_price: float, signal: dict = None):
+        """Yazılımsal TP/SL kontrolü + Dinamik Bollinger TP"""
         symbol = pos.symbol
         side = pos.side
+        
+        # Dinamik hedefler (Bollinger)
+        bb_mid = signal['bb_middle'] if signal else pos.tp1
+        bb_low = signal['bb_lower'] if signal else pos.tp2
 
         if side == 'SHORT':
             is_stopped = current_price >= pos.sl
@@ -194,9 +195,9 @@ class TradeManager:
             await self._close_full(pos, "STOP LOSS", current_price)
             return
 
-        # TP1 kontrolü
+        # TP1 kontrolü (Hedef: Orta Bant - SMA20)
         if not pos.tp1_hit:
-            is_tp1 = (current_price <= pos.tp1) if side == 'SHORT' else (current_price >= pos.tp1)
+            is_tp1 = (current_price <= bb_mid) if side == 'SHORT' else (current_price >= bb_mid)
             if is_tp1:
                 pos.tp1_hit = True
                 tp1_amount = self.exchange.sanitize_amount(symbol, pos.initial_amount * TP1_CLOSE_PCT)
@@ -204,18 +205,21 @@ class TradeManager:
                     self.exchange.close_position(symbol, side, tp1_amount)
                     pos.amount -= tp1_amount
 
+                logger.info(f"🎯 TP1 HIT (Bollinger Mid): {symbol} @ {current_price} | Kalan: {pos.amount}")
+                
+                # Stopu girişe çek (BE)
                 self.exchange.cancel_all_orders(symbol)
                 pos.sl = pos.entry_price
                 self.exchange.set_stop_loss(symbol, side, pos.sl)
                 
+                from .redis_client import redis_client
                 await redis_client.hset("bot:positions", symbol, pos.to_dict())
-                pnl_pct = self._calc_pnl_pct(pos, pos.tp1)
+                pnl_pct = self._calc_pnl_pct(pos, current_price)
                 notifier.notify_trade_close(symbol, "TP1", pnl_pct, 0)
-                logger.info(f"🎯 TP1 HIT: {symbol} @ {current_price} | Kalan: {pos.amount}")
 
-        # TP2 kontrolü
+        # TP2 kontrolü (Hedef: Diğer Bant)
         elif not pos.tp2_hit:
-            is_tp2 = (current_price <= pos.tp2) if side == 'SHORT' else (current_price >= pos.tp2)
+            is_tp2 = (current_price <= bb_low) if side == 'SHORT' else (current_price >= bb_low)
             if is_tp2:
                 pos.tp2_hit = True
                 tp2_amount = self.exchange.sanitize_amount(symbol, pos.initial_amount * TP2_CLOSE_PCT)
@@ -223,19 +227,23 @@ class TradeManager:
                     self.exchange.close_position(symbol, side, tp2_amount)
                     pos.amount -= tp2_amount
 
+                logger.info(f"🎯 TP2 HIT (Bollinger Low): {symbol} @ {current_price} | Kalan: {pos.amount}")
+
                 self.exchange.cancel_all_orders(symbol)
+                # SL'i TP1 seviyesine çekerek kârı kilitle
                 if side == 'SHORT':
-                    pos.sl = pos.entry_price - (pos.entry_price - pos.tp1) * 0.5
+                    pos.sl = pos.entry_price - (pos.entry_price - bb_mid) * 0.5
                 else:
-                    pos.sl = pos.entry_price + (pos.tp1 - pos.entry_price) * 0.5
+                    pos.sl = pos.entry_price + (bb_mid - pos.entry_price) * 0.5
                 self.exchange.set_stop_loss(symbol, side, pos.sl)
 
+                from .redis_client import redis_client
                 await redis_client.hset("bot:positions", symbol, pos.to_dict())
-                pnl_pct = self._calc_pnl_pct(pos, pos.tp2)
+                pnl_pct = self._calc_pnl_pct(pos, current_price)
                 notifier.notify_trade_close(symbol, "TP2", pnl_pct, 0)
-                logger.info(f"🎯 TP2 HIT: {symbol} @ {current_price} | Kalan: {pos.amount}")
 
         else:
+            # TP3 Kalanı sömür (Sabit TP3 fiyatı veya daha uzak bir hedef)
             is_tp3 = (current_price <= pos.tp3) if side == 'SHORT' else (current_price >= pos.tp3)
             if is_tp3:
                 await self._close_full(pos, "TP3", current_price)

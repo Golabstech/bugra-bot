@@ -33,6 +33,7 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
     bb = ta.bbands(df['close'], length=20, std=2)
     if bb is not None:
         df['bb_lower'] = bb.iloc[:, 0]
+        df['bb_middle'] = bb.iloc[:, 1]
         df['bb_upper'] = bb.iloc[:, 2]
         df['bb_pct'] = (df['close'] - df['bb_lower']) / (df['bb_upper'] - df['bb_lower'])
     else:
@@ -338,6 +339,9 @@ def generate_signal(df: pd.DataFrame, symbol: str, include_all: bool = False, fu
         'atr': atr,
         'atr_pct': atr_pct,
         'funding_rate': funding_rate,
+        'bb_middle': float(last['bb_middle']),
+        'bb_lower': float(last['bb_lower']),
+        'bb_upper': float(last['bb_upper']),
         'is_valid': is_valid,
         'filter_reason': filter_reason
     }
