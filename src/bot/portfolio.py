@@ -155,8 +155,8 @@ class PortfolioManager:
                     margin = (amount * entry_price) / LEVERAGE
                     
                     # Hedefleri gerçek giriş fiyatına göre oluştur (Eksikse)
-                    from .strategy import TradingStrategy
-                    strat = TradingStrategy()
+                    from .strategy import Strategy
+                    strat = Strategy()
                     # Tipik bir ATR bulamazsak %2-4-6 TP ve %1.5 SL kullan
                     if side == 'LONG':
                         tp1, tp2, tp3 = entry_price * 1.02, entry_price * 1.04, entry_price * 1.06
