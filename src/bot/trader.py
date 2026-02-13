@@ -9,6 +9,7 @@ from . import notifier
 from .config import (
     STRATEGY_SIDE, TP1_CLOSE_PCT, TP2_CLOSE_PCT, TP3_CLOSE_PCT,
     ENABLE_FLIP_STRATEGY, FLIP_TP1_PCT, FLIP_TP2_PCT, FLIP_SL_PCT,
+    TAKER_FEE,
 )
 
 logger = logging.getLogger("trader")
@@ -89,7 +90,9 @@ class TradeManager:
         return False
 
     async def check_positions(self, scanner=None):
-        """Açık pozisyonları kontrol et — TP/SL + Signal Decay"""
+        """Açık pozisyonları kontrol et — TP/SL + Signal Decay + Zaman Limiti"""
+        from datetime import datetime, timezone
+
         for symbol, pos in list(self.portfolio.positions.items()):
             try:
                 ticker = self.exchange.fetch_ticker(symbol)
@@ -97,6 +100,16 @@ class TradeManager:
                     continue
 
                 current_price = float(ticker['last'])
+
+                # 0. Zaman Bazlı Çıkış (48 saat limiti)
+                if pos.opened_at:
+                    opened = datetime.fromisoformat(pos.opened_at)
+                    age_hours = (datetime.now(timezone.utc) - opened).total_seconds() / 3600
+                    if age_hours > 48:
+                        pnl_pct = self._calc_pnl_pct(pos, current_price)
+                        logger.warning(f"⏰ ZAMAN AŞIMI: {symbol} | {age_hours:.0f}h açık | PnL: {pnl_pct:+.2f}% | Kapatılıyor.")
+                        await self._close_full(pos, "TIME_EXIT", current_price)
+                        continue
                 
                 # 🧠 Piyasa verilerini bir kez tara (BB ve Skor için)
                 latest_signal = None
@@ -112,6 +125,7 @@ class TradeManager:
 
             except Exception as e:
                 logger.error(f"❌ {symbol} kontrol hatası: {e}")
+
 
     async def _check_signal_decay(self, pos, current_price: float, signal: dict):
         """
@@ -168,8 +182,9 @@ class TradeManager:
                     pos.sl = pos.entry_price # Stopu girişe çek
                     self.exchange.cancel_all_orders(symbol)
                     self.exchange.set_stop_loss(symbol, pos.side, pos.sl)
-                    # Portfolio objesini güncelle
-                    await self.portfolio.register_position(pos.to_dict(), pos.amount, pos.margin)
+                    # Güncellenen SL'i Redis'e yaz
+                    from .redis_client import redis_client
+                    await redis_client.hset("bot:positions", symbol, pos.to_dict())
             
             # B) POZİSYON ZARARDA VEYA YATAY -> Zaman kaybı yapma, çık.
             elif pnl_pct < 0.2:
@@ -265,10 +280,13 @@ class TradeManager:
         logger.info(f"{'✅' if pnl_usd >= 0 else '❌'} {symbol} kapatıldı: {result} | PnL: {pnl_pct:+.2f}% (${pnl_usd:+.2f})")
 
     def _calc_pnl_pct(self, pos, exit_price: float) -> float:
-        """PnL yüzde hesapla"""
+        """PnL yüzde hesapla (Fee dahil)"""
+        fee_pct = TAKER_FEE * 100 * 2  # Giriş + Çıkış fee
         if pos.side == 'SHORT':
-            return ((pos.entry_price - exit_price) / pos.entry_price) * 100
-        return ((exit_price - pos.entry_price) / pos.entry_price) * 100
+            raw = ((pos.entry_price - exit_price) / pos.entry_price) * 100
+        else:
+            raw = ((exit_price - pos.entry_price) / pos.entry_price) * 100
+        return raw - fee_pct
 
     async def _execute_flip_trade(self, symbol: str, side: str, price: float, score: int):
         """

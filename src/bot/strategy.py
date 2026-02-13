@@ -76,27 +76,22 @@ def score_short(row: pd.Series, prev_row: pd.Series = None) -> tuple[int, int, l
     bb_pct, stoch_k, mfi = row['bb_pct'], row['stoch_k'], row['mfi']
     ema9, ema21, sma50 = row['ema9'], row['ema21'], row['sma50']
 
-    # ADX + DI (Backtest: Zararlı çıktı, puanı düşürüldü)
-    if adx > 25 and di_minus > di_plus:
-        score += 10 # 30 -> 10
-        reasons.append(f"ADX({adx:.0f})+DI-")
-    elif di_minus > di_plus:
-        score += 5 # 15 -> 5
-    # ADX (Trend Gücü - Düşük olması tercih sebebi çünkü yatay piyasa = reversion)
-    if float(row['adx']) < 30:
-        reasons.append(f"ADX({int(row['adx'])})")
-        score += 20  # 15 -> 20 (Biraz gevşetildi)
-    elif float(row['adx']) > 50:
+    # ADX + DI (Tek blok — çift sayım önlendi)
+    # Düşük ADX = yatay piyasa = mean reversion'a uygun (SHORT için ideal)
+    # Yüksek ADX = güçlü trend = mean reversion tehlikeli
+    if adx < 25:
+        score += 20
+        reasons.append(f"ADX({adx:.0f})Low")
+        if di_minus > di_plus:
+            score += 5
+            reasons.append("DI->DI+")
+    elif adx <= 50:
+        if di_minus > di_plus:
+            score += 10
+            reasons.append(f"ADX({adx:.0f})+DI-")
+    else:
         score -= 10
         reasons.append("ADX-High")
-
-    # ADX + DI (Backtest: Zararlı çıktı, puanı düşürüldü) - Bu kısım yeni ADX puanlaması ile çakışabilir, dikkatli ol.
-    # if adx > 25 and di_minus > di_plus:
-    #     score += 10 # 30 -> 10
-    #     reasons.append(f"ADX({adx:.0f})+DI-")
-    # elif di_minus > di_plus:
-    #     score += 5 # 15 -> 5
-    #     reasons.append("DI->DI+")
 
     # SMA50 Overextension
     dist = (row['close'] - sma50) / sma50 * 100 if sma50 > 0 else 0
@@ -319,6 +314,13 @@ def generate_signal(df: pd.DataFrame, symbol: str, include_all: bool = False, fu
         tp1 = price - (risk * TP1_RR)
         tp2 = price - (risk * TP2_RR)
         tp3 = price - (risk * TP3_RR)
+
+        # R:R Kontrolü: BB Mid hedefi SL riskinin en az yarısını karşılamalı
+        bb_mid_distance = price - float(last['bb_middle'])
+        if bb_mid_distance < risk * 0.5 and is_valid:
+            is_valid = False
+            filter_reason = "BB_RR"
+            if not include_all: return None
     else:
         sl = price - risk
         tp1 = price + (risk * TP1_RR)
