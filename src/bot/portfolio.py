@@ -326,4 +326,5 @@ class PortfolioManager:
             'open_positions': len(self.positions),
             'wins': self.daily_trades['wins'],
             'losses': self.daily_trades['losses'],
+            'last_update': datetime.now(timezone.utc).isoformat()
         }

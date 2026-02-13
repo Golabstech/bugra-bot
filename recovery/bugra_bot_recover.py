@@ -11,6 +11,11 @@ import pandas as pd
 import pandas_ta as ta
 import logging
 import time
+import sys
+
+# Windows DNS/EventLoop Fix
+if sys.platform == 'win32':
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 # --- LOG AYARLARI ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')

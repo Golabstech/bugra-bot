@@ -134,7 +134,7 @@ class ExchangeClient:
             # Binance tek bir yönde sadece bir closePosition=True emrine izin verir
             self.cancel_all_orders(symbol)
             import time
-            time.sleep(0.1) # Borsa motoruna vakit tanı
+            time.sleep(1.0) # Borsa motoruna vakit tanı (Binance -4130 hatası için artırıldı)
             
             sl_side = 'buy' if side == 'SHORT' else 'sell'
             order = self.exchange.create_order(
