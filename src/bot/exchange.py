@@ -332,45 +332,50 @@ class ExchangeClient:
             logger.error(f"❌ Top coinler alınamadı: {e}")
             return []
 
-    def fetch_all_trade_history(self, limit_per_symbol: int = 200) -> list:
+    def fetch_all_trade_history(self, limit_per_symbol: int = 500) -> list:
         """
-        🚀 GARANTİ TARAMA: Borsadaki tüm aktif sembolleri tek tek sorgular.
-        Hiçbir işlemi atlamaz ama 30-60 saniye sürebilir.
+        🚀 ZEKİ TARAMA: Önce 'income' (gelir) geçmişine bakar.
+        Hangi coinlerde kar/zarar varsa sadece onları tarar. Çok daha hızlı ve temizdir.
         """
         try:
-            # 1. Tüm aktif sembolleri al
-            markets = self.exchange.load_markets(reload=True)
-            active_symbols = [
-                m['symbol'] for m in markets.values() 
-                if m.get('active') and m.get('quote') == 'USDT'
-            ]
+            # 1. Gelir geçmişinden (realized pnl, commission vb) hangi sembollerle işlem yapılmış bul
+            # params {'incomeType': 'REALIZED_PNL'} veya benzeri filtresi eklenebilir ama en garantisi hepsidir
+            logger.info("🔍 İşlem görmüş semboller tespit ediliyor...")
+            incomes = self.exchange.fetch_income(params={'limit': 1000})
             
-            logger.info(f"💾 Toplam {len(active_symbols)} sembol taranacak. Bu işlem biraz sürebilir...")
+            traded_symbols = set()
+            for inc in incomes:
+                symbol = inc.get('symbol') or inc.get('info', {}).get('symbol')
+                if symbol:
+                    # Binance sembolünü CCXT formatına güvenli çevir
+                    try:
+                        market = self.exchange.market(symbol)
+                        traded_symbols.add(market['symbol'])
+                    except Exception:
+                        continue
+            
+            if not traded_symbols:
+                logger.warning("📊 İşlem kaydı olan sembol bulunamadı (Income history boş).")
+                return []
+                
+            logger.info(f"✅ {len(traded_symbols)} farklı sembolde işlem kaydı bulundu. Sadece bunlar taranacak.")
             
             all_trades = []
-            import time
-            
-            # 2. Her sembolü tek tek sorgula
-            for i, symbol in enumerate(active_symbols):
+            for symbol in traded_symbols:
                 try:
-                    # Rate limit dostu: Her 20 sorguda bir çok kısa bekle
-                    if i > 0 and i % 20 == 0:
-                        time.sleep(0.2)
-                        
                     trades = self.fetch_trade_history(symbol, limit=limit_per_symbol)
                     if trades:
-                        logger.info(f"✅ {symbol}: {len(trades)} işlem bulundu.")
                         all_trades.extend(trades)
                 except Exception:
                     continue
             
-            # 3. Zamana göre sırala
+            # Zamana göre sırala
             all_trades.sort(key=lambda x: x.get('timestamp', 0), reverse=True)
-            logger.info(f"🏁 Tarama bitti. Toplam {len(all_trades)} işlem birleştirildi.")
+            logger.info(f"🏁 Taramada toplam {len(all_trades)} işlem birleştirildi.")
             return all_trades
 
         except Exception as e:
-            logger.error(f"❌ Garanti tarama hatası: {e}")
+            logger.error(f"❌ Zeki tarama hatası: {e}")
             return []
 
     def fetch_trade_history(self, symbol: str = None, limit: int = 200) -> list:
