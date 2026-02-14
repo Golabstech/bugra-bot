@@ -120,8 +120,9 @@ async def download_trades(symbol: Optional[str] = None):
     all_trades.sort(key=lambda x: x.get('timestamp', 0), reverse=True)
     
     output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow(['Zaman', 'Sembol', 'Yön', 'Fiyat', 'Miktar', 'Tutar', 'Komisyon', 'Birim'])
+    # Excel'de düzgün açılması için noktali virgül (;) kullanıyoruz
+    writer = csv.writer(output, delimiter=';')
+    writer.writerow(['Zaman', 'Sembol', 'Yön', 'Miktar', 'Fiyat', 'Toplam Tutar', 'Komisyon', 'Birim'])
     
     for t in all_trades:
         if not isinstance(t, dict): continue
@@ -129,17 +130,19 @@ async def download_trades(symbol: Optional[str] = None):
             t.get('datetime'),
             t.get('symbol'),
             t.get('side'),
-            t.get('price'),
             t.get('amount'),
+            t.get('price'),
             t.get('cost'),
             t.get('fee', {}).get('cost') if t.get('fee') else 0,
             t.get('fee', {}).get('currency') if t.get('fee') else ''
         ])
     
-    output.seek(0)
+    # Excel'in Türkçe karakterleri ve tablo yapısını tanıması için UTF-8-SIG (BOM) kullanıyoruz
+    csv_data = output.getvalue().encode('utf-8-sig')
     filename = f"bugra_bot_trades_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    
     return StreamingResponse(
-        output,
+        io.BytesIO(csv_data),
         media_type="text/csv",
         headers={"Content-Disposition": f"attachment; filename={filename}"}
     )

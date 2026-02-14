@@ -8,3 +8,4 @@ logs/
 backtest_trades.csv
 backtest_positions.csv
 temp_backtest_data/
+backtest_data/
