@@ -334,57 +334,43 @@ class ExchangeClient:
 
     def fetch_all_trade_history(self, limit_per_symbol: int = 200) -> list:
         """
-        🚀 DERİN TARAMA: Tüm geçmişi akıllıca çeker.
+        🚀 GARANTİ TARAMA: Borsadaki tüm aktif sembolleri tek tek sorgular.
+        Hiçbir işlemi atlamaz ama 30-60 saniye sürebilir.
         """
         try:
-            traded_symbols = set()
+            # 1. Tüm aktif sembolleri al
+            markets = self.exchange.load_markets(reload=True)
+            active_symbols = [
+                m['symbol'] for m in markets.values() 
+                if m.get('active') and m.get('quote') == 'USDT'
+            ]
             
-            # 1. Gelir geçmişini çek (En iyi yöntem)
-            try:
-                incomes = self.exchange.fetch_income(params={'limit': 1000})
-                for inc in incomes:
-                    sym = inc.get('info', {}).get('symbol')
-                    if sym: traded_symbols.add(sym)
-                logger.info(f"📊 Gelir geçmişinden {len(traded_symbols)} sembol bulundu.")
-            except Exception as e:
-                logger.warning(f"⚠️ Gelir geçmişi alınamadı, fallback'e geçiliyor: {e}")
-
-            # 2. Opsiyonel Fallback: Açık/Kapalı Pozisyonları tara
-            try:
-                positions = self.exchange.fetch_positions()
-                for p in positions:
-                    if float(p.get('info', {}).get('realizedProfit', 0)) != 0 or float(p.get('contracts', 0)) > 0:
-                        sym = p['info'].get('symbol')
-                        if sym: traded_symbols.add(sym)
-                logger.info(f"📊 Pozisyon geçmişinden tarama yapıldı. Toplam sembol: {len(traded_symbols)}")
-            except Exception as e:
-                logger.debug(f"Pozisyon tarama hatası: {e}")
-
-            if not traded_symbols:
-                logger.warning("🚫 Hiçbir işlem görmüş sembol bulunamadı!")
-                return []
+            logger.info(f"💾 Toplam {len(active_symbols)} sembol taranacak. Bu işlem biraz sürebilir...")
             
             all_trades = []
-            logger.info(f"🔍 {len(traded_symbols)} sembol için derin işlem taraması başlıyor...")
+            import time
             
-            for raw_symbol in traded_symbols:
+            # 2. Her sembolü tek tek sorgula
+            for i, symbol in enumerate(active_symbols):
                 try:
-                    # Sembol ismini doğrula (CCXT formatı)
-                    market = self.exchange.market(raw_symbol)
-                    ccxt_symbol = market['symbol']
-                    
-                    trades = self.fetch_trade_history(ccxt_symbol, limit=limit_per_symbol)
+                    # Rate limit dostu: Her 20 sorguda bir çok kısa bekle
+                    if i > 0 and i % 20 == 0:
+                        time.sleep(0.2)
+                        
+                    trades = self.fetch_trade_history(symbol, limit=limit_per_symbol)
                     if trades:
+                        logger.info(f"✅ {symbol}: {len(trades)} işlem bulundu.")
                         all_trades.extend(trades)
-                except Exception as e:
+                except Exception:
                     continue
-                    
-            # Zamana göre sırala
+            
+            # 3. Zamana göre sırala
             all_trades.sort(key=lambda x: x.get('timestamp', 0), reverse=True)
+            logger.info(f"🏁 Tarama bitti. Toplam {len(all_trades)} işlem birleştirildi.")
             return all_trades
 
         except Exception as e:
-            logger.error(f"❌ Derin tarama hatası: {e}")
+            logger.error(f"❌ Garanti tarama hatası: {e}")
             return []
 
     def fetch_trade_history(self, symbol: str = None, limit: int = 200) -> list:
