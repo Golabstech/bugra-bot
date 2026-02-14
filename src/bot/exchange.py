@@ -334,20 +334,45 @@ class ExchangeClient:
 
     def fetch_all_trade_history(self, limit_per_symbol: int = 500) -> list:
         """
-        🚀 GÜVENLİ HİBRİT TARAMA: 
-        'fetch_income' hatası riskine karşı bakiyeli ve pozisyonlu coinleri tarar.
+        🚀 GÜVENLİ HİBRİT TARAMA (Income Odaklı): 
+        Önce 'fetch_income' dener, olmazsa manuel API çağrısı yapar.
+        Böylece işlem gören coinleri %100 tespit eder.
         """
         try:
             target_symbols = set()
             
-            # 1. Bakiye Kontrolü (En güvenli yöntem)
+            # 1. Gelir Geçmişi (En güçlü sinyal)
+            try:
+                # Yöntem A: Standart CCXT
+                if hasattr(self.exchange, 'fetch_income'):
+                    incomes = self.exchange.fetch_income(params={'limit': 1000})
+                # Yöntem B: Doğran Futures Endpoint (Fallback)
+                elif hasattr(self.exchange, 'fapiPrivateGetIncome'):
+                    incomes = self.exchange.fapiPrivateGetIncome(params={'limit': 1000})
+                else:
+                    incomes = [] # İkisi de yoksa geç
+
+                for inc in incomes:
+                    # Sembol verisi 'symbol' veya 'info.symbol' içinde olabilir
+                    sym = inc.get('symbol') or inc.get('info', {}).get('symbol')
+                    if sym:
+                        try:
+                            # CCXT Unified Symbol formatına çevir
+                            market = self.exchange.market(sym)
+                            target_symbols.add(market['symbol'])
+                        except: pass
+                
+                if target_symbols:
+                    logger.info(f"🔍 Gelir API'sinden {len(target_symbols)} sembol bulundu.")
+            except Exception as e:
+                logger.warning(f"⚠️ Gelir geçmişi (Income) alınırken hata: {e}")
+
+            # 2. Bakiye Kontrolü (Destekleyici)
             try:
                 # Tüm bakiyeleri çek (Sıfır olmayanları)
                 balance = self.exchange.fetch_balance()
                 for currency, data in balance.items():
                     if data['total'] > 0 and currency != 'USDT':
-                        # Currency -> Symbol dönüşümü (örn: BTC -> BTC/USDT:USDT)
-                        # Bu her zaman %100 tutmaz ama çoğu zaman işe yarar
                         try:
                             # Piyasada bu coin ile başlayan USDT çiftini bul
                             markets = self.exchange.load_markets()
@@ -356,7 +381,7 @@ class ExchangeClient:
                                     target_symbols.add(symbol)
                                     break
                         except: pass
-                logger.info(f"💰 Bakiyeli {len(target_symbols)} sembol bulundu.")
+                logger.info(f"💰 Bakiye + Gelir taraması sonucu: {len(target_symbols)} sembol.")
             except Exception as e:
                 logger.warning(f"⚠️ Bakiye tarama hatası: {e}")
 
