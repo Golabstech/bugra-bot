@@ -335,42 +335,56 @@ class ExchangeClient:
     def fetch_all_trade_history(self, limit_per_symbol: int = 200) -> list:
         """
         🚀 DERİN TARAMA: Tüm geçmişi akıllıca çeker.
-        Önce gelir geçmişinden işlem görmüş coinleri bulur, sonra sadece onları tarar.
         """
         try:
-            # 1. Gelir geçmişini çek (PnL üreten sembolleri bulmak için)
-            # CCXT: fetch_income
-            incomes = self.exchange.fetch_income(params={'limit': 1000})
-            
-            # 2. İşlem geçmişi olan benzersiz sembolleri ayıkla
             traded_symbols = set()
-            for inc in incomes:
-                symbol = inc.get('info', {}).get('symbol')
-                if symbol:
-                    # Binance sembolünü CCXT formatına çevir (örn: BTCUSDT -> BTC/USDT:USDT)
-                    # Basitçe marketten bulabiliriz
-                    traded_symbols.add(symbol)
             
-            logger.info(f"🔍 Toplam {len(traded_symbols)} farklı sembolde işlem kaydı tespit edildi. Tarama başlıyor...")
+            # 1. Gelir geçmişini çek (En iyi yöntem)
+            try:
+                incomes = self.exchange.fetch_income(params={'limit': 1000})
+                for inc in incomes:
+                    sym = inc.get('info', {}).get('symbol')
+                    if sym: traded_symbols.add(sym)
+                logger.info(f"📊 Gelir geçmişinden {len(traded_symbols)} sembol bulundu.")
+            except Exception as e:
+                logger.warning(f"⚠️ Gelir geçmişi alınamadı, fallback'e geçiliyor: {e}")
+
+            # 2. Opsiyonel Fallback: Açık/Kapalı Pozisyonları tara
+            try:
+                positions = self.exchange.fetch_positions()
+                for p in positions:
+                    if float(p.get('info', {}).get('realizedProfit', 0)) != 0 or float(p.get('contracts', 0)) > 0:
+                        sym = p['info'].get('symbol')
+                        if sym: traded_symbols.add(sym)
+                logger.info(f"📊 Pozisyon geçmişinden tarama yapıldı. Toplam sembol: {len(traded_symbols)}")
+            except Exception as e:
+                logger.debug(f"Pozisyon tarama hatası: {e}")
+
+            if not traded_symbols:
+                logger.warning("🚫 Hiçbir işlem görmüş sembol bulunamadı!")
+                return []
             
             all_trades = []
+            logger.info(f"🔍 {len(traded_symbols)} sembol için derin işlem taraması başlıyor...")
             
-            # 3. Sadece bu sembolleri tara
             for raw_symbol in traded_symbols:
-                # CCXT sembol ismini bul
-                market = self.exchange.market(raw_symbol)
-                ccxt_symbol = market['symbol']
-                
-                trades = self.fetch_trade_history(ccxt_symbol, limit=limit_per_symbol)
-                if trades:
-                    all_trades.extend(trades)
+                try:
+                    # Sembol ismini doğrula (CCXT formatı)
+                    market = self.exchange.market(raw_symbol)
+                    ccxt_symbol = market['symbol']
+                    
+                    trades = self.fetch_trade_history(ccxt_symbol, limit=limit_per_symbol)
+                    if trades:
+                        all_trades.extend(trades)
+                except Exception as e:
+                    continue
                     
             # Zamana göre sırala
             all_trades.sort(key=lambda x: x.get('timestamp', 0), reverse=True)
             return all_trades
 
         except Exception as e:
-            logger.error(f"❌ Derin tarama başarısız: {e}")
+            logger.error(f"❌ Derin tarama hatası: {e}")
             return []
 
     def fetch_trade_history(self, symbol: str = None, limit: int = 200) -> list:
