@@ -60,30 +60,70 @@ async def get_candidates():
     return candidates or []
 
 @app.get("/trades")
-async def get_trades(limit: int = 100):
-    """Borsadaki işlem geçmişini JSON olarak getir"""
+async def get_trades(symbol: Optional[str] = None, limit: int = 50):
+    """Borsadaki işlem geçmişini getir. Sembol verilmezse aktif pozisyonları tarar."""
     from bot.exchange import ExchangeClient
     exchange = ExchangeClient()
-    trades = exchange.fetch_trade_history(limit=limit)
-    return trades
+    
+    if symbol:
+        return exchange.fetch_trade_history(symbol, limit=limit)
+    
+    # Sembol verilmediyse aktif ve adayları tara
+    positions = await redis_client.hgetall("bot:positions")
+    candidates = await redis_client.get("bot:candidates") or []
+    
+    target_symbols = list(positions.keys())
+    for c in candidates[:10]: # İlk 10 adayı ekle
+        if c['symbol'] not in target_symbols:
+            target_symbols.append(c['symbol'])
+            
+    all_trades = []
+    for sym in target_symbols:
+        trades = exchange.fetch_trade_history(sym, limit=20)
+        if trades:
+            all_trades.extend(trades)
+            
+    # Zamana göre sırala (en yeni üstte)
+    all_trades.sort(key=lambda x: x.get('timestamp', 0), reverse=True)
+    return all_trades[:limit]
 
 @app.get("/download-trades")
-async def download_trades():
-    """İşlem geçmişini CSV dosyası olarak indir"""
+async def download_trades(symbol: Optional[str] = None):
+    """İşlem geçmişini CSV olarak indir. Sembol verilmezse geniş tarama yapar."""
     from bot.exchange import ExchangeClient
     exchange = ExchangeClient()
-    trades = exchange.fetch_trade_history(limit=500)
     
-    if not trades:
-        raise HTTPException(status_code=404, detail="İşlem geçmişi bulunamadı.")
+    target_symbols = []
+    if symbol:
+        target_symbols = [symbol]
+    else:
+        # Geniş tarama: Aktifler + Adaylar + Bakiyeli Coinler
+        positions = await redis_client.hgetall("bot:positions")
+        target_symbols = list(positions.keys())
+        
+        candidates = await redis_client.get("bot:candidates") or []
+        for c in candidates[:20]:
+            if c['symbol'] not in target_symbols: target_symbols.append(c['symbol'])
+            
+    if not target_symbols:
+        raise HTTPException(status_code=404, detail="Taranacak sembol bulunamadı. Lütfen bir sembol belirtin.")
+
+    all_trades = []
+    for sym in target_symbols:
+        trades = exchange.fetch_trade_history(sym, limit=100)
+        if trades: all_trades.extend(trades)
+    
+    if not all_trades:
+        raise HTTPException(status_code=404, detail="Belirtilen coinler için işlem geçmişi bulunamadı.")
+    
+    # Sırala
+    all_trades.sort(key=lambda x: x.get('timestamp', 0), reverse=True)
     
     output = io.StringIO()
     writer = csv.writer(output)
-    
-    # CSV Başlıkları
     writer.writerow(['Zaman', 'Sembol', 'Yön', 'Fiyat', 'Miktar', 'Tutar', 'Komisyon', 'Birim'])
     
-    for t in trades:
+    for t in all_trades:
         if not isinstance(t, dict): continue
         writer.writerow([
             t.get('datetime'),
@@ -98,7 +138,6 @@ async def download_trades():
     
     output.seek(0)
     filename = f"bugra_bot_trades_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-    
     return StreamingResponse(
         output,
         media_type="text/csv",
