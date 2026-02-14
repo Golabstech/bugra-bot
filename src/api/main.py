@@ -84,6 +84,7 @@ async def download_trades():
     writer.writerow(['Zaman', 'Sembol', 'Yön', 'Fiyat', 'Miktar', 'Tutar', 'Komisyon', 'Birim'])
     
     for t in trades:
+        if not isinstance(t, dict): continue
         writer.writerow([
             t.get('datetime'),
             t.get('symbol'),

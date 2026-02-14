@@ -335,7 +335,8 @@ class ExchangeClient:
     def fetch_trade_history(self, symbol: str = None, limit: int = 200) -> list:
         """Kullanıcının işlem geçmişini çek (CCXT fetchMyTrades)"""
         try:
-            return self.exchange.fetch_my_trades(symbol, limit=limit)
+            trades = self.exchange.fetch_my_trades(symbol, limit=limit)
+            return trades if trades is not None else []
         except Exception as e:
             logger.error(f"❌ İşlem geçmişi alınamadı: {e}")
             return []
