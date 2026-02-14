@@ -332,6 +332,47 @@ class ExchangeClient:
             logger.error(f"❌ Top coinler alınamadı: {e}")
             return []
 
+    def fetch_all_trade_history(self, limit_per_symbol: int = 200) -> list:
+        """
+        🚀 DERİN TARAMA: Tüm geçmişi akıllıca çeker.
+        Önce gelir geçmişinden işlem görmüş coinleri bulur, sonra sadece onları tarar.
+        """
+        try:
+            # 1. Gelir geçmişini çek (PnL üreten sembolleri bulmak için)
+            # CCXT: fetch_income
+            incomes = self.exchange.fetch_income(params={'limit': 1000})
+            
+            # 2. İşlem geçmişi olan benzersiz sembolleri ayıkla
+            traded_symbols = set()
+            for inc in incomes:
+                symbol = inc.get('info', {}).get('symbol')
+                if symbol:
+                    # Binance sembolünü CCXT formatına çevir (örn: BTCUSDT -> BTC/USDT:USDT)
+                    # Basitçe marketten bulabiliriz
+                    traded_symbols.add(symbol)
+            
+            logger.info(f"🔍 Toplam {len(traded_symbols)} farklı sembolde işlem kaydı tespit edildi. Tarama başlıyor...")
+            
+            all_trades = []
+            
+            # 3. Sadece bu sembolleri tara
+            for raw_symbol in traded_symbols:
+                # CCXT sembol ismini bul
+                market = self.exchange.market(raw_symbol)
+                ccxt_symbol = market['symbol']
+                
+                trades = self.fetch_trade_history(ccxt_symbol, limit=limit_per_symbol)
+                if trades:
+                    all_trades.extend(trades)
+                    
+            # Zamana göre sırala
+            all_trades.sort(key=lambda x: x.get('timestamp', 0), reverse=True)
+            return all_trades
+
+        except Exception as e:
+            logger.error(f"❌ Derin tarama başarısız: {e}")
+            return []
+
     def fetch_trade_history(self, symbol: str = None, limit: int = 200) -> list:
         """Kullanıcının işlem geçmişini çek (CCXT fetchMyTrades)"""
         try:

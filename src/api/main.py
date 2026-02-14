@@ -60,15 +60,18 @@ async def get_candidates():
     return candidates or []
 
 @app.get("/trades")
-async def get_trades(symbol: Optional[str] = None, limit: int = 50):
-    """Borsadaki işlem geçmişini getir. Sembol verilmezse aktif pozisyonları tarar."""
+async def get_trades(symbol: Optional[str] = None, full: bool = False, limit: int = 50):
+    """Borsadaki işlem geçmişini getir. full=true ise tüm geçmişi derinlemesine tarar."""
     from bot.exchange import ExchangeClient
     exchange = ExchangeClient()
     
     if symbol:
         return exchange.fetch_trade_history(symbol, limit=limit)
     
-    # Sembol verilmediyse aktif ve adayları tara
+    if full:
+        return exchange.fetch_all_trade_history(limit_per_symbol=limit)
+    
+    # Varsayılan: Aktif ve adayları tara
     positions = await redis_client.hgetall("bot:positions")
     candidates = await redis_client.get("bot:candidates") or []
     
@@ -88,33 +91,30 @@ async def get_trades(symbol: Optional[str] = None, limit: int = 50):
     return all_trades[:limit]
 
 @app.get("/download-trades")
-async def download_trades(symbol: Optional[str] = None):
-    """İşlem geçmişini CSV olarak indir. Sembol verilmezse geniş tarama yapar."""
+async def download_trades(symbol: Optional[str] = None, full: bool = False):
+    """İşlem geçmişini CSV olarak indir. full=true ise tüm geçmişi derinlemesine tarar."""
     from bot.exchange import ExchangeClient
     exchange = ExchangeClient()
     
-    target_symbols = []
+    all_trades = []
     if symbol:
-        target_symbols = [symbol]
+        all_trades = exchange.fetch_trade_history(symbol, limit=200)
+    elif full:
+        all_trades = exchange.fetch_all_trade_history(limit_per_symbol=200)
     else:
-        # Geniş tarama: Aktifler + Adaylar + Bakiyeli Coinler
+        # Mevcut akıllı tarama (Aktif + Adaylar)
         positions = await redis_client.hgetall("bot:positions")
         target_symbols = list(positions.keys())
-        
         candidates = await redis_client.get("bot:candidates") or []
         for c in candidates[:20]:
             if c['symbol'] not in target_symbols: target_symbols.append(c['symbol'])
             
-    if not target_symbols:
-        raise HTTPException(status_code=404, detail="Taranacak sembol bulunamadı. Lütfen bir sembol belirtin.")
-
-    all_trades = []
-    for sym in target_symbols:
-        trades = exchange.fetch_trade_history(sym, limit=100)
-        if trades: all_trades.extend(trades)
+        for sym in target_symbols:
+            trades = exchange.fetch_trade_history(sym, limit=100)
+            if trades: all_trades.extend(trades)
     
     if not all_trades:
-        raise HTTPException(status_code=404, detail="Belirtilen coinler için işlem geçmişi bulunamadı.")
+        raise HTTPException(status_code=404, detail="İşlem geçmişi bulunamadı.")
     
     # Sırala
     all_trades.sort(key=lambda x: x.get('timestamp', 0), reverse=True)
