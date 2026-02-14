@@ -1,5 +1,17 @@
 # 📋 CHANGELOG - Crypto Trading Bot
 
+## [v3.0.4] - 2026-02-14
+
+### ✨ Yeni Özellikler
+- **Trade History API:** Borsadaki tüm işlem geçmişini JSON (`/trades`) veya CSV (`/download-trades`) formatında indirme desteği eklendi.
+
+### 🛠 Düzeltmeler
+- **Portfolio Sync:** `TradingStrategy` -> `Strategy` sınıf adı çakışması giderildi.
+- **Entry Price Sync:** Borsadaki gerçek maliyet ile bot hafızası arasındaki senkronizasyon %100 uyumlu hale getirildi.
+- **Northflank Port:** Statik port yerine dinamik `$PORT` kullanımına geçildi.
+
+---
+
 ## [v3.0.0] - 2026-02-14
 
 ### 🚀 Northflank & All-in-One Mimarisi
