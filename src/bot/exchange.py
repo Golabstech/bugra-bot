@@ -334,54 +334,49 @@ class ExchangeClient:
 
     def fetch_all_trade_history(self, limit_per_symbol: int = 500) -> list:
         """
-        🚀 AKILLI HİBRİT TARAMA: 
-        Sadece işlem ihtimali olan coinleri (Income, Pozisyon, Emir, Bakiye) tespit ederek tarar.
-        Hem hızlıdır hem de 'Market not found' hatalarını önler.
+        🚀 GÜVENLİ HİBRİT TARAMA: 
+        'fetch_income' hatası riskine karşı bakiyeli ve pozisyonlu coinleri tarar.
         """
         try:
             target_symbols = set()
             
-            # 1. Gelir Geçmişi (En güçlü sinyal)
+            # 1. Bakiye Kontrolü (En güvenli yöntem)
             try:
-                # Son 1000 gelir hareketini al
-                incomes = self.exchange.fetch_income(params={'limit': 1000})
-                for inc in incomes:
-                    # Sembol verisi 'symbol' veya 'info.symbol' içinde olabilir
-                    sym = inc.get('symbol') or inc.get('info', {}).get('symbol')
-                    if sym:
+                # Tüm bakiyeleri çek (Sıfır olmayanları)
+                balance = self.exchange.fetch_balance()
+                for currency, data in balance.items():
+                    if data['total'] > 0 and currency != 'USDT':
+                        # Currency -> Symbol dönüşümü (örn: BTC -> BTC/USDT:USDT)
+                        # Bu her zaman %100 tutmaz ama çoğu zaman işe yarar
                         try:
-                            # CCXT Unified Symbol formatına çevir (örn: BTCUSDT -> BTC/USDT:USDT)
-                            market = self.exchange.market(sym)
-                            target_symbols.add(market['symbol'])
-                        except Exception:
-                            continue # Tanımsız sembolleri atla
-                logger.info(f"🔍 Gelir kayıtlarından {len(target_symbols)} sembol bulundu.")
+                            # Piyasada bu coin ile başlayan USDT çiftini bul
+                            markets = self.exchange.load_markets()
+                            for symbol in markets:
+                                if symbol.startswith(f"{currency}/USDT"):
+                                    target_symbols.add(symbol)
+                                    break
+                        except: pass
+                logger.info(f"💰 Bakiyeli {len(target_symbols)} sembol bulundu.")
             except Exception as e:
-                logger.warning(f"⚠️ Gelir geçmişi alınamadı: {e}")
+                logger.warning(f"⚠️ Bakiye tarama hatası: {e}")
 
             # 2. Açık Pozisyonlar (Kesin işlem vardır)
             try:
                 positions = self.exchange.fetch_positions()
                 for p in positions:
-                    if float(p.get('contracts', 0)) > 0: # Sadece boyutu olan pozisyonlar
+                    if float(p.get('contracts', 0)) > 0 or float(p.get('info', {}).get('positionAmt', 0)) != 0:
                         target_symbols.add(p['symbol'])
                 logger.info(f"🔍 Pozisyonlardan liste güncellendi. Toplam: {len(target_symbols)}")
             except Exception as e:
                 logger.debug(f"Pozisyon tarama hatası: {e}")
 
-            # 3. Açık Emirler (İşlem niyeti var)
-            try:
-                # fetch_open_orders genellikle sembol ister ama bazı borsalarda sembolsüz de dönebilir
-                # Binance Futures için sembolsüz çağrı bazen tümünü verir, bazen hata verir.
-                # Risk almamak için sadece üstteki ikisi genelde yeterlidir ama bakiye kontrolü ekleyelim.
-                pass 
-            except Exception:
-                pass
-
             if not target_symbols:
-                logger.warning("🚫 Taranacak aktif sembol bulunamadı. Fallback: Popüler coinler taranıyor...")
-                # Hiçbir şey bulamazsak en azından popülerleri tara ki boş dönmesin
-                top_coins = ['BTC/USDT:USDT', 'ETH/USDT:USDT', 'BNB/USDT:USDT', 'SOL/USDT:USDT', 'XRP/USDT:USDT']
+                logger.warning("🚫 Taranacak aktif sembol bulunamadı. Fallback: Popüler işlem çiftleri taranıyor...")
+                # Hiçbir şey bulamazsak popülerleri tara
+                top_coins = [
+                    'BTC/USDT:USDT', 'ETH/USDT:USDT', 'BNB/USDT:USDT', 'SOL/USDT:USDT', 'XRP/USDT:USDT',
+                    'ADA/USDT:USDT', 'DOGE/USDT:USDT', 'AVAX/USDT:USDT', 'DOT/USDT:USDT', 'MATIC/USDT:USDT'
+                ]
                 target_symbols.update(top_coins)
 
             all_trades = []
@@ -402,7 +397,7 @@ class ExchangeClient:
             return all_trades
 
         except Exception as e:
-            logger.error(f"❌ Akıllı tarama hatası: {e}")
+            logger.error(f"❌ Güvenli tarama hatası: {e}")
             return []
 
     def fetch_trade_history(self, symbol: str = None, limit: int = 200) -> list:
