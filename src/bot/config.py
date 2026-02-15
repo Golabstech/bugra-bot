@@ -78,12 +78,21 @@ PULLBACK_ENABLED = os.getenv("PULLBACK_ENABLED", "true").lower() == "true"
 PULLBACK_TIMEOUT_CANDLES = int(os.getenv("PULLBACK_TIMEOUT_CANDLES", "10"))  # 10 mum içinde gelmezse iptal
 
 # 📈 KADEMELİ FİBONACCI GİRİŞİ
-# Her seviyede belirli bir yüzde pozisyon açılır
+# İlk sinyalde hemen girilen %, kalanı Fibonacci seviyelerine dağıtılır
 FIB_LEVELS = [0.382, 0.50, 0.618]  # Fibonacci geri çekilme seviyeleri
+
+# 🎯 Hemen giriş oranı (ENV'den ayarlanabilir, varsayılan %50)
+# Örnek: 0.30 = %30 hemen, %70 pullback için
+PULLBACK_IMMEDIATE_ALLOC = float(os.getenv("PULLBACK_IMMEDIATE_ALLOC", "0.50"))
+
+# Kalan pullback kısmının dağılımı (toplamı 1.0 olmalı)
+# Varsayılan: Kalan %50'yi 0.382/0.50/0.618 seviyelerine dağıt
+_pullback_remaining = 1.0 - PULLBACK_IMMEDIATE_ALLOC
 FIB_TIER_ALLOCATIONS = {
-    0.382: 0.25,  # %25 pozisyon (hızlı pullback)
-    0.50: 0.25,   # %25 pozisyon (orta pullback) 
-    0.618: 0.50,  # %50 pozisyon (derin pullback)
+    "IMMEDIATE": PULLBACK_IMMEDIATE_ALLOC,
+    0.382: _pullback_remaining * 0.25,  # Kalanın %25'i
+    0.50: _pullback_remaining * 0.25,   # Kalanın %25'i
+    0.618: _pullback_remaining * 0.50,  # Kalanın %50'si
 }
 
 # ==========================================

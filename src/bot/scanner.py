@@ -217,16 +217,15 @@ class MarketScanner:
             if signal is None:
                 continue
             
-            # PENDING_PULLBACK sinyallerini bekleyenlere ekle
-            if signal.get('side') == 'PENDING_PULLBACK':
-                pending = signal.get('pending_signal')
-                if pending and pending.symbol not in self.pending_signals:
-                    self.pending_signals[pending.symbol] = pending
-                    # Detaylı seviye bilgisi
-                    levels = [f"Fib{lvl*100:.0f}%" for lvl in sorted(pending.fib_levels)]
-                    logger.info(f"🎯 {pending.symbol} PULLBACK QUEUE | {' | '.join(levels)} | Timeout: {len(pending.fib_levels)*3}m")
-            else:
-                # Direkt işleme hazır sinyal
+            # YENİ: Hemen giriş + Pullback kuyruğu yapısı
+            pending = signal.get('pending_pullback')
+            if pending and pending.symbol not in self.pending_signals:
+                self.pending_signals[pending.symbol] = pending
+                levels = [f"Fib{lvl*100:.0f}%" for lvl in sorted(pending.fib_levels)]
+                logger.info(f"🎯 {pending.symbol} PULLBACK QUEUE | {' | '.join(levels)} | Timeout: {PULLBACK_TIMEOUT_CANDLES}m")
+            
+            # Direkt işleme hazır sinyal (hemen giriş kısmı)
+            if signal.get('side') in ['LONG', 'SHORT']:
                 new_signals.append(signal)
         
         # Pullback'ten gelen sinyalleri birleştir

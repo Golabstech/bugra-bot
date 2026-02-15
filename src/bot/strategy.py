@@ -5,7 +5,8 @@ from .config import (
     MOMENTUM_THRESHOLD_PCT, VOLUME_THRESHOLD_MUL, SL_ATR_MULT, 
     TP1_RR, TP2_RR, TP3_RR,
     MTF_ENABLED, MTF_EMA_FAST, MTF_EMA_SLOW,
-    PULLBACK_ENABLED, FIB_LEVELS, FIB_TIER_ALLOCATIONS, PULLBACK_TIMEOUT_CANDLES
+    PULLBACK_ENABLED, FIB_LEVELS, FIB_TIER_ALLOCATIONS, 
+    PULLBACK_TIMEOUT_CANDLES, PULLBACK_IMMEDIATE_ALLOC
 )
 
 logger = logging.getLogger("strategy")
@@ -274,7 +275,10 @@ class Strategy:
         
         # 🎯 PULLBACK ENTRY (Kademeli Fibonacci)
         if PULLBACK_ENABLED:
-            # Sinyal bulduk ama hemen girmiyoruz, geri çekilme bekliyoruz
+            # YENİ STRATEJI: %X hemen gir, kalanı pullback bekle
+            immediate_alloc = PULLBACK_IMMEDIATE_ALLOC  # ENV'den okunur (varsayılan 0.50)
+            
+            # Pullback kuyruğu oluştur (kalan kısım için)
             pending = PendingSignal(
                 symbol=symbol,
                 side=side,
@@ -282,25 +286,39 @@ class Strategy:
                 momentum_low=last_candle['low'],
                 momentum_close=last_candle['close'],
                 atr=atr,
-                reason=reason
+                reason=reason,
+                # Kalan %50'nin dağılımı
+                fib_levels=FIB_LEVELS,
+                allocations={
+                    lvl: alloc / (1 - immediate_alloc)  # Normalize et
+                    for lvl, alloc in FIB_TIER_ALLOCATIONS.items()
+                    if isinstance(lvl, float)  # Sadece sayısal seviyeler
+                }
             )
             
             # Detaylı log
             level_info = []
             for lvl, target in pending.level_targets.items():
-                alloc = pending.allocations.get(lvl, 0)
+                alloc = pending.allocations.get(lvl, 0) * (1 - immediate_alloc)
                 level_info.append(f"Fib{lvl*100:.1f}%@{target:.4f}({alloc:.0%})")
             
-            logger.info(f"🎯 {symbol} PULLBACK KUYRUĞU: {side}")
+            logger.info(f"🎯 {symbol} HİBRİT GİRİŞ: {side}")
+            logger.info(f"   ⚡ Hemen: {immediate_alloc:.0%} | ⏳ Pullback: {1-immediate_alloc:.0%}")
             logger.info(f"   📊 Seviyeler: {' | '.join(level_info)}")
             logger.info(f"   ⏰ Timeout: {PULLBACK_TIMEOUT_CANDLES} mum")
             
-            return {
-                'symbol': symbol,
-                'side': 'PENDING_PULLBACK',
-                'pending_signal': pending,
-                'reason': reason + " | ⏳ Fibo Pullback"
-            }
+            # Hemen giriş sinyali + Pullback kuyruğu
+            immediate_signal = self._build_tiered_signal(
+                symbol=symbol,
+                side_type=side,
+                entry_price=last_candle['close'],
+                atr=atr,
+                reason=reason + " | ⚡ Hemen Giriş",
+                allocation=immediate_alloc
+            )
+            immediate_signal['pending_pullback'] = pending  # Kalanı için
+            
+            return immediate_signal
         
         # Pullback devre dışıysa direkt giriş
         current_candle = df.iloc[-1]
