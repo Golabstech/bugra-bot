@@ -80,7 +80,39 @@ class TradeManager:
 
                 # SL emri koy (Pozisyona bağlı — closePosition)
                 self.exchange.set_stop_loss(symbol, side, signal['sl'])
-                # TP emirleri yazılımsal yönetilecek (_check_tp_sl içinde)
+                
+                # TP emirlerini borsaya diz (manuel müdahale için yazılımsal kontrol de devam eder)
+                tp_amount = self.exchange.sanitize_amount(symbol, amount)
+                logger.info(f"🔍 TP EMİR DİZME BAŞLIYOR: {symbol} | Side: {side} | TP Amount: {tp_amount}")
+                logger.info(f"   TP1: {signal.get('tp1')}, TP2: {signal.get('tp2')}, TP3: {signal.get('tp3')}")
+                
+                if tp_amount > 0:
+                    # TP1 emri
+                    if signal.get('tp1'):
+                        logger.info(f"   → TP1 emri diziliyor...")
+                        result1 = self.exchange.set_take_profit(symbol, side, signal['tp1'], tp_amount * TP1_CLOSE_PCT)
+                        if result1:
+                            logger.info(f"   ✅ TP1 emri dizildi: {symbol} @ {signal['tp1']}")
+                        else:
+                            logger.error(f"   ❌ TP1 emri DİZİLEMEDİ: {symbol}")
+                    # TP2 emri
+                    if signal.get('tp2'):
+                        logger.info(f"   → TP2 emri diziliyor...")
+                        result2 = self.exchange.set_take_profit(symbol, side, signal['tp2'], tp_amount * TP2_CLOSE_PCT)
+                        if result2:
+                            logger.info(f"   ✅ TP2 emri dizildi: {symbol} @ {signal['tp2']}")
+                        else:
+                            logger.error(f"   ❌ TP2 emri DİZİLEMEDİ: {symbol}")
+                    # TP3 emri
+                    if signal.get('tp3'):
+                        logger.info(f"   → TP3 emri diziliyor...")
+                        result3 = self.exchange.set_take_profit(symbol, side, signal['tp3'], tp_amount * TP3_CLOSE_PCT)
+                        if result3:
+                            logger.info(f"   ✅ TP3 emri dizildi: {symbol} @ {signal['tp3']}")
+                        else:
+                            logger.error(f"   ❌ TP3 emri DİZİLEMEDİ: {symbol}")
+                else:
+                    logger.error(f"❌ TP Amount sıfır veya negatif: {tp_amount}")
 
                 notifier.notify_trade_open(symbol, side, amount, fill_price, margin)
                 logger.info(f"✅ {symbol} {side} açıldı @ {fill_price} | Margin: ${margin} | {allocation:.0%}")
@@ -194,28 +226,58 @@ class TradeManager:
 
 
     async def _check_tp_sl(self, pos, current_price: float):
-        """Yazılımsal TP/SL kontrolü"""
+        """
+        Yazılımsal TP/SL kontrolü + Manuel müdahale algılama
+        
+        Not: TP emirleri artık borsaya diziliyor. Bu fonksiyon:
+        1. Manuel kapatma algılar (emirler yoksa)
+        2. SL kontrolü yapar
+        3. Kalan pozisyon miktarını senkronize eder
+        """
         symbol = pos.symbol
         side = pos.side
         
-        # CRITICAL FIX: Check if position still exists on exchange
-        # Exchange SL might have triggered without bot knowing
+        # 1. Pozisyon hâlâ borsada var mı kontrol et
         exchange_positions = self.exchange.get_positions()
-        exchange_symbols = set()
+        exchange_pos = None
         for p in exchange_positions:
             if float(p.get('contracts', 0)) == 0:
                 continue
             sym = p['info'].get('symbol') or p['symbol'].replace('/', '').split(':')[0]
-            exchange_symbols.add(sym)
+            if sym == symbol:
+                exchange_pos = p
+                break
         
-        if symbol not in exchange_symbols:
-            logger.warning(f"🔔 {symbol} borsada kapanmış (SL/Likidason), senkronize ediliyor")
-            # Calculate approximate PnL from last known price
+        # Pozisyon borsada yoksa → Manuel veya SL ile kapatılmış
+        if not exchange_pos:
+            # Açık emirleri kontrol et (TP emirleri hâlâ var mı?)
+            open_orders = self.exchange.get_open_orders(symbol)
+            tp_orders = [o for o in open_orders if o.get('type') in ['TAKE_PROFIT', 'TAKE_PROFIT_MARKET']]
+            
+            if not tp_orders:
+                # Emirler de yoksa → Manuel kapatılmış
+                logger.warning(f"🔔 {symbol} manuel olarak kapatılmış (pozisyon ve emirler yok)")
+            else:
+                # Emirler var ama pozisyon yoksa → SL çalışmış
+                logger.warning(f"🔔 {symbol} borsada kapanmış (SL/Likidasyon), senkronize ediliyor")
+            
             pnl_pct = self._calc_pnl_pct(pos, current_price)
             pnl_usd = pos.margin * (pnl_pct / 100)
             await self.portfolio.close_position(symbol, "EXCHANGE_CLOSED", pnl_usd)
             return
         
+        # 2. Borsadaki pozisyon miktarı ile senkronize et (manuel kısmi kapatma)
+        exchange_amount = float(exchange_pos.get('contracts', 0))
+        if exchange_amount < pos.amount * 0.95:  # %5'ten fazla fark varsa
+            closed_amount = pos.amount - exchange_amount
+            logger.info(f"📊 {symbol} kısmi kapatma algılandı: {closed_amount:.4f} kapatılmış")
+            pos.amount = exchange_amount
+            # Kalan emirleri iptal et ve yeniden diz
+            self.exchange.cancel_all_orders(symbol)
+            if pos.amount > 0:
+                self.exchange.set_stop_loss(symbol, side, pos.sl)
+        
+        # 3. SL kontrolü (fiyat bazlı - emir çalışmamış olabilir)
         if side == 'SHORT':
             is_stopped = current_price >= pos.sl
         else:
@@ -224,47 +286,38 @@ class TradeManager:
         if is_stopped:
             await self._close_full(pos, "STOP LOSS", current_price)
             return
-
-        # TP1 kontrolü (Hedef: ATR TP1)
-        if not pos.tp1_hit:
+        
+        # 4. TP emirlerinin durumunu kontrol et (manuel iptal edilmiş mi?)
+        open_orders = self.exchange.get_open_orders(symbol)
+        tp1_exists = any(o.get('stopPrice') == pos.tp1 for o in open_orders if o.get('type') in ['TAKE_PROFIT', 'TAKE_PROFIT_MARKET'])
+        
+        # TP1 emri yoksa ve fiyat geçtiyse → TP1 çalışmış
+        if not tp1_exists and not pos.tp1_hit:
             is_tp1 = (current_price <= pos.tp1) if side == 'SHORT' else (current_price >= pos.tp1)
             if is_tp1:
                 pos.tp1_hit = True
-                tp1_amount = self.exchange.sanitize_amount(symbol, pos.initial_amount * TP1_CLOSE_PCT)
-                if tp1_amount > 0:
-                    self.exchange.close_position(symbol, side, tp1_amount)
-                    # CRITICAL FIX: Prevent negative amount
-                    pos.amount = max(0, pos.amount - tp1_amount)
-
-                # CRITICAL FIX: Correct SL trailing for both LONG and SHORT
-                # Move SL to entry + (risk * retrace_factor) toward breakeven
+                logger.info(f"🎯 TP1 HIT (borsa emri): {symbol} @ {current_price}")
+                
+                # Kalan pozisyon için SL trailing
                 if side == 'LONG':
-                    # LONG: SL is below entry, risk = entry - sl (positive)
                     risk = pos.entry_price - pos.sl
                     pos.sl = pos.entry_price - (risk * TP1_SL_RETRACE)
                 else:
-                    # SHORT: SL is above entry, risk = sl - entry (positive)
                     risk = pos.sl - pos.entry_price
                     pos.sl = pos.entry_price + (risk * TP1_SL_RETRACE)
                 
-                logger.info(f"🎯 TP1 HIT: {symbol} @ {current_price} | Yeni SL: {pos.sl:.2f}")
-                
-                # Pozisyon hâlâ açık mı kontrol et
-                exchange_positions = self.exchange.get_positions()
-                position_exists = any(
-                    (p['info'].get('symbol') or p['symbol'].replace('/', '').split(':')[0]) == symbol
-                    and float(p.get('contracts', 0)) > 0
-                    for p in exchange_positions
-                )
-                
-                if position_exists:
-                    self.exchange.cancel_all_orders(symbol)
+                # Yeni SL'yi ayarla
+                self.exchange.cancel_all_orders(symbol)
+                if pos.amount > 0:
                     self.exchange.set_stop_loss(symbol, side, pos.sl)
-                    
-                    from .redis_client import redis_client
-                    await redis_client.hset("bot:positions", symbol, pos.to_dict())
-                else:
-                    logger.info(f"ℹ️ {symbol} pozisyonu zaten kapalı, SL ayarlanmadı")
+                    # TP2 ve TP3 emirlerini yeniden diz
+                    if pos.tp2:
+                        self.exchange.set_take_profit(symbol, side, pos.tp2, pos.amount * TP2_CLOSE_PCT)
+                    if pos.tp3:
+                        self.exchange.set_take_profit(symbol, side, pos.tp3, pos.amount * TP3_CLOSE_PCT)
+                
+                from .redis_client import redis_client
+                await redis_client.hset("bot:positions", symbol, pos.to_dict())
                 
                 pnl_pct = self._calc_pnl_pct(pos, current_price)
                 realized_pnl_usd = (pos.initial_amount * TP1_CLOSE_PCT) * pos.entry_price * (pnl_pct/100)

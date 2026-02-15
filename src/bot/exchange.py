@@ -38,6 +38,23 @@ class ExchangeClient:
             logger.info("🧪 DEMO TRADING (Mock) modu aktif")
         else:
             logger.warning("⚠️ CANLI TRADING modu aktif!")
+        
+        # Market cache için yeni özellikler
+        self._markets_cache = None
+        self._markets_cache_time = 0
+        self._markets_cache_ttl = 3600  # 1 saat
+
+    def load_markets_cached(self, reload: bool = False) -> dict:
+        """Market verilerini cache ile yükle"""
+        import time
+        now = time.time()
+        
+        if reload or self._markets_cache is None or (now - self._markets_cache_time) > self._markets_cache_ttl:
+            self._markets_cache = self.exchange.load_markets(reload=reload)
+            self._markets_cache_time = now
+            logger.debug("🔄 Markets cache yenilendi")
+        
+        return self._markets_cache
 
     def get_balance(self) -> dict:
         """Futures cüzdan bakiyesini döndür"""
@@ -133,8 +150,8 @@ class ExchangeClient:
             # Önce varsa semboldeki tüm SL/TP emirlerini temizle (Çakışmayı önlemek için)
             # Binance tek bir yönde sadece bir closePosition=True emrine izin verir
             self.cancel_all_orders(symbol)
-            import time
-            time.sleep(1.0) # Borsa motoruna vakit tanı (Binance -4130 hatası için artırıldı)
+            import asyncio
+            asyncio.run(asyncio.sleep(1.0))  # Borsa motoruna vakit tanı (async)
             
             sl_side = 'buy' if side == 'SHORT' else 'sell'
             order = self.exchange.create_order(
@@ -157,6 +174,10 @@ class ExchangeClient:
         """Take profit emri koy"""
         try:
             tp_side = 'buy' if side == 'SHORT' else 'sell'
+            
+            # DEBUG: Parametreleri logla
+            logger.info(f"🔍 TP EMİR PARAMETRELERİ: {symbol} | Side: {side} | TP Side: {tp_side} | Price: {tp_price} | Amount: {amount}")
+            
             order = self.exchange.create_order(
                 symbol, 'take_profit_market', tp_side, amount,
                 params={
@@ -165,10 +186,11 @@ class ExchangeClient:
                     'closePosition': False,
                 }
             )
-            logger.info(f"🎯 TP ayarlandı: {symbol} @ {tp_price}")
+            logger.info(f"🎯 TP ayarlandı: {symbol} @ {tp_price} | Side: {side} | TP Side: {tp_side}")
             return order
         except Exception as e:
             logger.error(f"❌ TP ayarlanamadı {symbol}: {e}")
+            logger.error(f"   Parametreler: side={side}, tp_price={tp_price}, amount={amount}")
             return None
 
     def cancel_all_orders(self, symbol: str):
@@ -239,8 +261,8 @@ class ExchangeClient:
                 return self.exchange.fetch_ticker(symbol)
             except Exception as e:
                 if i < 2:
-                    import time
-                    time.sleep(1)
+                    import asyncio
+                    asyncio.run(asyncio.sleep(1))  # Async sleep
                     continue
                 logger.error(f"❌ Ticker alınamadı {symbol}: {e}")
         return None
@@ -256,13 +278,13 @@ class ExchangeClient:
             return 0.0
 
     def get_market_limits(self, symbol: str) -> dict:
-        """Market limitlerini getir (Min/Max miktar)"""
+        """Market limitlerini getir (Min/Max miktar) - Cache kullanarak"""
         try:
-            # Market verisinin yüklü olduğundan emin ol
-            if not self.exchange.markets:
-                self.exchange.load_markets()
+            # Market verisinin yüklü olduğundan emin ol (cache'li versiyon)
+            market = self.load_markets_cached().get(symbol)
+            if not market:
+                return {'min_qty': 0.0, 'max_qty': float('inf')}
             
-            market = self.exchange.market(symbol)
             info = market.get('info', {})
             filters = info.get('filters', [])
             

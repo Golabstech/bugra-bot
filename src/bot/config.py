@@ -96,15 +96,6 @@ FIB_TIER_ALLOCATIONS = {
 }
 
 # ==========================================
-# 📼 REPLAY MODE (Backtest Verisi ile Canlı Simülasyon)
-# ==========================================
-REPLAY_MODE = os.getenv("REPLAY_MODE", "false").lower() == "true"
-REPLAY_DATA_FOLDER = os.getenv("REPLAY_DATA_FOLDER", "backtest_data")
-REPLAY_SPEED = float(os.getenv("REPLAY_SPEED", "100"))  # 100x hızlı
-REPLAY_START_DATE = os.getenv("REPLAY_START_DATE", "2026-01-15")  # YYYY-MM-DD
-REPLAY_END_DATE = os.getenv("REPLAY_END_DATE", "2026-01-20")  # YYYY-MM-DD
-
-# ==========================================
 # ⏱️ TARAMA AYARLARI
 # ==========================================
 SCAN_INTERVAL_SECONDS = int(os.getenv("SCAN_INTERVAL_SECONDS", "10")) # 10 saniye (Hızlı Tarama)

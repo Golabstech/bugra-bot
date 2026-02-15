@@ -10,7 +10,7 @@ from .exchange import ExchangeClient
 from .strategy import Strategy, PendingSignal
 from .config import (
     TIMEFRAME, OHLCV_LIMIT, TOP_COINS_COUNT, MIN_24H_VOLUME,
-    MTF_ENABLED, MTF_TIMEFRAME, PULLBACK_ENABLED
+    MTF_ENABLED, MTF_TIMEFRAME, PULLBACK_ENABLED, PULLBACK_TIMEOUT_CANDLES
 )
 
 from .redis_client import redis_client
@@ -37,6 +37,32 @@ class MarketScanner:
         self.IGNORED_KEYWORDS = ['DOWN', 'UP', 'BEAR', 'BULL'] # Kaldıraçlı token isimleri
         self.last_refresh = 0
         self.refresh_interval = 3600  # Her saat coin listesini yenile
+        
+        # 🚀 Paralellik limiti (rate limit koruması)
+        self._semaphore = asyncio.Semaphore(20)  # Max 20 eşzamanlı tarama
+
+    async def _emit_signal_immediately(self, signal: dict):
+        """
+        🚀 Sinyali hemen Redis'e yazarak main.py'nin hemen işlemesini sağla
+        Bu fonksiyon sinyal bulunur bulunmaz çağrılır, tarama bitmesini beklemez
+        """
+        try:
+            signal_data = {
+                'symbol': signal['symbol'],
+                'side': signal['side'],
+                'entry_price': signal['entry_price'],
+                'sl': signal['sl'],
+                'tp1': signal['tp1'],
+                'tp2': signal['tp2'],
+                'tp3': signal['tp3'],
+                'reason': signal.get('reason', ''),
+                'allocation': signal.get('allocation', 1.0),
+                'timestamp': time.time()
+            }
+            await redis_client.set(f"signal:immediate:{signal['symbol']}", signal_data, expire=60)
+            logger.info(f"🚀 Sinyal Redis'e yazıldı: {signal['symbol']} {signal['side']} @ {signal['entry_price']}")
+        except Exception as e:
+            logger.error(f"❌ Sinyal Redis'e yazılamadı: {e}")
 
     def refresh_symbols(self):
         """Top coin listesini güncelle"""
@@ -47,6 +73,13 @@ class MarketScanner:
         logger.info(f"🔄 Top {TOP_COINS_COUNT} coin listesi yenileniyor...")
         
         try:
+            # Replay modu kontrolü - exchange'in özel bir attribute'u var mı?
+            if hasattr(self.exchange, 'data_provider'):
+                # Replay modu - data_provider'dan symbolleri al
+                self.symbols = self.exchange.data_provider.symbols[:TOP_COINS_COUNT]
+                logger.info(f"✅ {len(self.symbols)} coin yüklendi (Replay Mode)")
+                return
+            
             # Tüm futures sembollerini ve hacimlerini çek
             tickers_list = self.exchange.exchange.fapiPublicGetTicker24hr()
         except Exception as e:
@@ -83,10 +116,7 @@ class MarketScanner:
             
             # 4. Status Kontrolü (Sadece aktif işlem görenleri al)
             # Not: Ticker verisinden status gelmeyebilir, exchange.markets'tan doğrulanabilir
-            if not self.exchange.exchange.markets:
-                self.exchange.exchange.load_markets(reload=True)
-            
-            market_info = self.exchange.exchange.markets.get(symbol)
+            market_info = self.exchange.load_markets_cached().get(symbol)
             if market_info:
                 # Hem active bayrağını hem de Binance'in status (TRADING) değerini kontrol et
                 active = market_info.get('active', True)
@@ -207,8 +237,12 @@ class MarketScanner:
             logger.info(f"⏳ {len(self.pending_signals)} bekleyen pullback kontrol ediliyor...")
             pullback_signals = await self.check_pending_pullbacks()
         
-        # Paralel tarama (Batch processing)
-        tasks = [self.scan_symbol(sym) for sym in self.symbols]
+        # Paralel tarama (Semaphore ile rate limit koruması)
+        async def scan_with_limit(sym):
+            async with self._semaphore:
+                return await self.scan_symbol(sym)
+        
+        tasks = [scan_with_limit(sym) for sym in self.symbols]
         results = await asyncio.gather(*tasks)
         
         # Yeni sinyalleri işle
@@ -227,6 +261,8 @@ class MarketScanner:
             # Direkt işleme hazır sinyal (hemen giriş kısmı)
             if signal.get('side') in ['LONG', 'SHORT']:
                 new_signals.append(signal)
+                # 🚀 HEMEN İŞLEME: Sinyali Redis'e yaz (main.py hemen işlesin)
+                asyncio.create_task(self._emit_signal_immediately(signal))
         
         # Pullback'ten gelen sinyalleri birleştir
         all_signals = pullback_signals + new_signals

@@ -101,12 +101,23 @@ class PortfolioManager:
         self.coin_cooldowns: dict[str, datetime] = {}
         self.coin_consecutive_losses: dict[str, int] = {}
         
+        # Sync caching
+        self._last_sync = 0
+        self._sync_interval = 5  # 5 saniye
+        
     async def sync_positions(self):
         """
         🔄 PORTFÖY SENKRONİZASYONU (Reconciliation)
         Botun hafızasındaki pozisyonlar ile borsadaki gerçek pozisyonları eşleştirir.
         Borsada kapanmış ama botta açık görünen 'hayalet' pozisyonları temizler.
         """
+        # Cache kontrolü - çok sık sync yapma
+        import time
+        now = time.time()
+        if now - self._last_sync < self._sync_interval:
+            return
+        self._last_sync = now
+        
         try:
             # 1. Redis'ten pozisyonları yükle (Eğer hafıza boşsa)
             if not self.positions:
@@ -182,7 +193,30 @@ class PortfolioManager:
                         # TP/SL hedefleri de güncellenmeli (opsiyonel ama sağlıklı)
                         await redis_client.hset("bot:positions", symbol, current_pos.to_dict())
             
-            # 5. Yetim Emir Temizliği
+            # 5. Yetim Emir Temizliği (Daha agresif)
+            # Tüm açık emirleri çek, pozisyonu olmayanların emirlerini sil
+            try:
+                all_open_orders = self.exchange.get_open_orders()
+                for order in all_open_orders:
+                    order_symbol = order.get('symbol', '').replace('/', '')
+                    # Sembolü normalize et
+                    if ':' in order_symbol:
+                        order_symbol = order_symbol.split(':')[0]
+                    
+                    # Bu sembolde pozisyon var mı?
+                    has_position = order_symbol in exchange_symbols or order_symbol in self.positions
+                    
+                    if not has_position:
+                        logger.warning(f"🧹 Yetim emir tespit edildi: {order_symbol} | Emir ID: {order.get('id')}")
+                        try:
+                            self.exchange.cancel_all_orders(order_symbol)
+                            logger.info(f"✅ {order_symbol} yetim emirleri temizlendi")
+                        except Exception as e:
+                            logger.error(f"❌ {order_symbol} emir temizleme hatası: {e}")
+            except Exception as e:
+                logger.debug(f"Yetim emir temizliği hatası: {e}")
+            
+            # Eski cleanup_orphan_orders da çalışsın (yedek olarak)
             active_syms = set(self.positions.keys()) | exchange_symbols
             self.exchange.cleanup_orphan_orders(active_syms)
 
@@ -213,6 +247,19 @@ class PortfolioManager:
             self.daily_pnl = 0.0
             self.daily_trades = {'wins': 0, 'losses': 0}
             self.daily_reset_date = today
+            # Cooldown'ları da temizle
+            self._cleanup_expired_cooldowns()
+    
+    def _cleanup_expired_cooldowns(self):
+        """Süresi dolmuş cooldown'ları temizle"""
+        now = datetime.now(timezone.utc)
+        expired = [s for s, dt in self.coin_cooldowns.items() if now > dt]
+        for symbol in expired:
+            del self.coin_cooldowns[symbol]
+            self.coin_consecutive_losses.pop(symbol, None)
+            logger.debug(f"🧹 {symbol} cooldown'tan temizlendi")
+        if expired:
+            logger.info(f"🧹 {len(expired)} süresi dolmuş cooldown temizlendi")
 
     def get_balance(self) -> dict:
         """Canlı bakiye bilgisi"""
@@ -325,6 +372,13 @@ class PortfolioManager:
 
         del self.positions[symbol]
         await redis_client.hdel("bot:positions", symbol)
+        
+        # 🧹 Emirleri temizle (pozisyon kapandı, emirler kalmasın)
+        try:
+            self.exchange.cancel_all_orders(symbol)
+            logger.info(f"🧹 {symbol} emirleri temizlendi (pozisyon kapandı)")
+        except Exception as e:
+            logger.warning(f"⚠️ {symbol} emir temizleme hatası: {e}")
         
         # Stats güncelle
         stats = self._get_sync_stats()

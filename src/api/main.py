@@ -27,7 +27,8 @@ class ReplayConfig(BaseModel):
     start_date: str = Field(..., description="Başlangıç tarihi (YYYY-MM-DD)")
     end_date: str = Field(..., description="Bitiş tarihi (YYYY-MM-DD)")
     speed: float = Field(100.0, description="Hız çarpanı (1.0 = gerçek zaman)")
-    symbols: List[str] = Field([], description="Test edilecek coinler (boş = tümü)")
+    symbols: List[str] = Field([], description="Test edilecek coinler (boş = otomatik)")
+    top_coins: int = Field(0, description="Otomatik coin sayısı (50/100/200, 0=symbols kullan)")
     initial_balance: float = Field(10000.0, description="Başlangıç bakiyesi")
     
 class ReplayState(BaseModel):
@@ -202,9 +203,11 @@ async def start_replay(config: ReplayConfig, background_tasks: BackgroundTasks):
         "end_date": "2026-01-16",
         "speed": 1000,
         "symbols": ["BTCUSDT", "ETHUSDT"],
+        "top_coins": 50,
         "initial_balance": 10000
     }
     ```
+    Not: `top_coins` > 0 ise Bybit'ten otomatik çeker, `symbols` kullanılmaz
     """
     # Mevcut durumu kontrol et
     current = await redis_client.get("replay:state")
@@ -218,6 +221,7 @@ async def start_replay(config: ReplayConfig, background_tasks: BackgroundTasks):
         "end_date": config.end_date,
         "speed": config.speed,
         "symbols": config.symbols,
+        "top_coins": config.top_coins,
         "initial_balance": config.initial_balance,
         "current_time": config.start_date,
         "progress_pct": 0.0,
@@ -228,9 +232,11 @@ async def start_replay(config: ReplayConfig, background_tasks: BackgroundTasks):
     await redis_client.set("replay:state", replay_config)
     await redis_client.set("replay:command", {"action": "start", "config": config.dict()})
     
+    mode_text = f"Top {config.top_coins} coin" if config.top_coins > 0 else f"{len(config.symbols)} coin"
+    
     return {
         "status": "started",
-        "message": f"Replay başlatıldı: {config.start_date} → {config.end_date} @ {config.speed}x",
+        "message": f"Replay başlatıldı: {config.start_date} → {config.end_date} @ {config.speed}x | {mode_text}",
         "config": config
     }
 
@@ -238,49 +244,35 @@ async def start_replay(config: ReplayConfig, background_tasks: BackgroundTasks):
 async def stop_replay():
     """Replay modunu durdur"""
     await redis_client.set("replay:command", {"action": "stop"})
-    
-    state = await redis_client.get("replay:state") or {}
-    state["status"] = ReplayStatus.IDLE
-    await redis_client.set("replay:state", state)
-    
-    return {"status": "stopped", "message": "Replay durduruldu"}
+    # State'i worker güncelleyecek - API sadece komut gönderir
+    return {"status": "pending", "message": "Replay durdurma isteği gönderildi"}
 
 @app.post("/replay/pause")
 async def pause_replay():
     """Replay modunu duraklat"""
     await redis_client.set("replay:command", {"action": "pause"})
-    
-    state = await redis_client.get("replay:state") or {}
-    state["status"] = ReplayStatus.PAUSED
-    await redis_client.set("replay:state", state)
-    
-    return {"status": "paused", "message": "Replay duraklatıldı"}
+    # State'i worker güncelleyecek
+    return {"status": "pending", "message": "Replay duraklatma isteği gönderildi"}
 
 @app.post("/replay/resume")
 async def resume_replay():
     """Replay modunu devam ettir"""
     await redis_client.set("replay:command", {"action": "resume"})
-    
-    state = await redis_client.get("replay:state") or {}
-    state["status"] = ReplayStatus.RUNNING
-    await redis_client.set("replay:state", state)
-    
-    return {"status": "resumed", "message": "Replay devam ediyor"}
+    # State'i worker güncelleyecek
+    return {"status": "pending", "message": "Replay devam ettirme isteği gönderildi"}
 
 @app.get("/replay/available-symbols")
 async def get_available_symbols():
     """Replay için kullanılabilir coinleri listele"""
-    import os
-    from bot.config import REPLAY_DATA_FOLDER
-    
-    symbols = []
-    if os.path.exists(REPLAY_DATA_FOLDER):
-        for f in os.listdir(REPLAY_DATA_FOLDER):
-            if f.endswith('_USDT_USDT.csv') and not f.startswith('_'):
-                coin = f.replace('_USDT_USDT.csv', '')
-                symbols.append(f"{coin}USDT")
+    # Bybit'ten popüler coinler
+    popular_coins = [
+        "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
+        "ADAUSDT", "DOGEUSDT", "AVAXUSDT", "DOTUSDT", "LINKUSDT",
+        "MATICUSDT", "LTCUSDT", "UNIUSDT", "ATOMUSDT", "ETCUSDT"
+    ]
     
     return {
-        "count": len(symbols),
-        "symbols": sorted(symbols)
+        "count": len(popular_coins),
+        "symbols": popular_coins,
+        "source": "Bybit API"
     }

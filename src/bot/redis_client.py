@@ -13,23 +13,35 @@ class RedisClient:
     def __init__(self):
         self.url = REDIS_URL
         self._redis = None
+        self._pool = None
 
     async def connect(self):
-        """Redis bağlantısını başlat"""
+        """Redis bağlantısını başlat (connection pool ile)"""
         if not self._redis:
             try:
-                self._redis = redis.from_url(self.url, decode_responses=True)
+                # Connection pool oluştur
+                self._pool = redis.ConnectionPool.from_url(
+                    self.url, 
+                    decode_responses=True,
+                    max_connections=20,
+                    socket_keepalive=True,
+                    socket_keepalive_options={},
+                    health_check_interval=30
+                )
+                self._redis = redis.Redis(connection_pool=self._pool)
                 await self._redis.ping()
-                logger.info("🔌 Redis bağlantısı başarılı.")
+                logger.info("🔌 Redis bağlantısı başarılı (pool: 20).")
             except Exception as e:
                 logger.error(f"❌ Redis bağlantı hatası: {e}")
                 self._redis = None
+                self._pool = None
 
     async def close(self):
         """Bağlantıyı kapat"""
-        if self._redis:
-            await self._redis.aclose()
-            self._redis = None
+        if self._pool:
+            await self._pool.disconnect()
+            self._pool = None
+        self._redis = None
 
     async def get(self, key: str):
         """Veri çek"""
