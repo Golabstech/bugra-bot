@@ -67,6 +67,34 @@ VOLUME_THRESHOLD_MUL = float(os.getenv("VOLUME_THRESHOLD_MUL", "1.5"))    # Orta
 COOLDOWN_SECONDS = int(os.getenv("COOLDOWN_SECONDS", "300"))              # 5 dakika
 MIN_24H_VOLUME = float(os.getenv("MIN_24H_VOLUME", "50000000"))           # 50M $
 
+# 🔄 MULTI-TIMEFRAME CONFIRMATION
+MTF_ENABLED = os.getenv("MTF_ENABLED", "true").lower() == "true"
+MTF_TIMEFRAME = os.getenv("MTF_TIMEFRAME", "15m")  # Üst zaman dilimi (15m veya 1h)
+MTF_EMA_FAST = int(os.getenv("MTF_EMA_FAST", "9"))   # Hızlı EMA
+MTF_EMA_SLOW = int(os.getenv("MTF_EMA_SLOW", "21"))  # Yavaş EMA
+
+# 🎯 PULLBACK ENTRY (Geri çekilmede giriş)
+PULLBACK_ENABLED = os.getenv("PULLBACK_ENABLED", "true").lower() == "true"
+PULLBACK_TIMEOUT_CANDLES = int(os.getenv("PULLBACK_TIMEOUT_CANDLES", "10"))  # 10 mum içinde gelmezse iptal
+
+# 📈 KADEMELİ FİBONACCI GİRİŞİ
+# Her seviyede belirli bir yüzde pozisyon açılır
+FIB_LEVELS = [0.382, 0.50, 0.618]  # Fibonacci geri çekilme seviyeleri
+FIB_TIER_ALLOCATIONS = {
+    0.382: 0.25,  # %25 pozisyon (hızlı pullback)
+    0.50: 0.25,   # %25 pozisyon (orta pullback) 
+    0.618: 0.50,  # %50 pozisyon (derin pullback)
+}
+
+# ==========================================
+# 📼 REPLAY MODE (Backtest Verisi ile Canlı Simülasyon)
+# ==========================================
+REPLAY_MODE = os.getenv("REPLAY_MODE", "false").lower() == "true"
+REPLAY_DATA_FOLDER = os.getenv("REPLAY_DATA_FOLDER", "backtest_data")
+REPLAY_SPEED = float(os.getenv("REPLAY_SPEED", "100"))  # 100x hızlı
+REPLAY_START_DATE = os.getenv("REPLAY_START_DATE", "2026-01-15")  # YYYY-MM-DD
+REPLAY_END_DATE = os.getenv("REPLAY_END_DATE", "2026-01-20")  # YYYY-MM-DD
+
 # ==========================================
 # ⏱️ TARAMA AYARLARI
 # ==========================================

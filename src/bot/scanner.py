@@ -7,8 +7,11 @@ import logging
 import time
 import asyncio
 from .exchange import ExchangeClient
-from .strategy import Strategy
-from .config import TIMEFRAME, OHLCV_LIMIT, TOP_COINS_COUNT, MIN_24H_VOLUME
+from .strategy import Strategy, PendingSignal
+from .config import (
+    TIMEFRAME, OHLCV_LIMIT, TOP_COINS_COUNT, MIN_24H_VOLUME,
+    MTF_ENABLED, MTF_TIMEFRAME, PULLBACK_ENABLED
+)
 
 from .redis_client import redis_client
 
@@ -16,12 +19,15 @@ logger = logging.getLogger("scanner")
 
 
 class MarketScanner:
-    """Sürekli çalışan piyasa tarayıcı"""
+    """Sürekli çalışan piyasa tarayıcı v2.0 - MTF + Pullback"""
 
     def __init__(self, exchange: ExchangeClient):
         self.exchange = exchange
         self.strategy = Strategy()
         self.symbols: list[str] = []
+        
+        # 🎯 Pullback bekleyen sinyaller
+        self.pending_signals: dict[str, PendingSignal] = {}
         
         # 🛡️ FİLTRE LİSTESİ (Stabil ve Pegged Coinler)
         self.IGNORED_COINS = {
@@ -100,19 +106,25 @@ class MarketScanner:
     async def scan_symbol(self, symbol: str) -> dict | None:
         """Tek bir coin'i tara ve sinyal üret"""
         try:
+            # Ana timeframe verisi
             ohlcv = self.exchange.fetch_ohlcv(symbol, TIMEFRAME, OHLCV_LIMIT)
             if not ohlcv or len(ohlcv) < 20:
                 return None
 
             df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-            
-            # İndikatörleri hesapla
             df = self.strategy.calculate_indicators(df)
-
-            # Sinyal üret
-            signal = self.strategy.generate_signal(symbol, df)
             
-            if signal.get('side') != 'WAIT':
+            # 🔄 MTF verisi (Özellik aktifse)
+            df_mtf = None
+            if MTF_ENABLED:
+                ohlcv_mtf = self.exchange.fetch_ohlcv(symbol, MTF_TIMEFRAME, 50)
+                if ohlcv_mtf and len(ohlcv_mtf) >= 25:
+                    df_mtf = pd.DataFrame(ohlcv_mtf, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+
+            # Sinyal üret (MTF dahil)
+            signal = self.strategy.generate_signal(symbol, df, df_mtf)
+            
+            if signal.get('side') not in ['WAIT', None]:
                 return signal
             
             return None
@@ -120,6 +132,68 @@ class MarketScanner:
         except Exception as e:
             logger.debug(f"⚠️ {symbol} tarama hatası: {e}")
             return None
+    
+    async def check_pending_pullbacks(self) -> list[dict]:
+        """
+        🎯 Bekleyen pullback sinyallerini kontrol et
+        Her Fibonacci seviyesine ulaşıldığında kademeli pozisyon açılır
+        """
+        triggered_signals = []
+        symbols_to_remove = []
+        
+        for symbol, pending in self.pending_signals.items():
+            try:
+                # Güncel fiyatı al
+                ticker = self.exchange.fetch_ticker(symbol)
+                if not ticker:
+                    continue
+                
+                current_price = float(ticker['last'])
+                
+                # Pullback durumunu kontrol et
+                result = self.strategy.process_pullback(pending, current_price)
+                side = result.get('side', 'WAITING')
+                
+                if side == 'TIERED_ENTRY':
+                    # Yeni seviye tetiklendi, kademeli pozisyon sinyali
+                    allocation = result.get('total_allocated', 0)
+                    signal = self.strategy._build_tiered_signal(
+                        symbol=symbol,
+                        side_type=result['side_type'],
+                        entry_price=result['entry_price'],
+                        atr=result['atr'],
+                        reason=result['reason'],
+                        allocation=allocation
+                    )
+                    triggered_signals.append(signal)
+                    
+                    # Tüm pozisyon açıldıysa pending'i temizle
+                    if pending.fully_triggered:
+                        symbols_to_remove.append(symbol)
+                        logger.info(f"✅ {symbol} FULL POSITION OPENED @ {current_price} | Toplam: {allocation:.0%}")
+                    else:
+                        logger.info(f"✅ {symbol} TIER #{len(pending.triggered_levels)} @ {current_price} | Bu: {allocation:.0%}")
+                
+                elif side == 'CANCELLED':
+                    # Pullback iptal edildi
+                    symbols_to_remove.append(symbol)
+                    total_allocated = result.get('total_allocated', 0)
+                    if total_allocated > 0:
+                        logger.info(f"❌ {symbol} PULLBACK CANCELLED (kısmi açıldı: {total_allocated:.0%})")
+                    else:
+                        logger.info(f"❌ {symbol} PULLBACK CANCELLED (hiç açılmadı)")
+                
+                # 'WAITING' durumunda devam et
+                
+            except Exception as e:
+                logger.debug(f"⚠️ {symbol} pullback kontrol hatası: {e}")
+        
+        # Tamamlanan/iptal edilen sinyalleri temizle
+        for sym in symbols_to_remove:
+            if sym in self.pending_signals:
+                del self.pending_signals[sym]
+        
+        return triggered_signals
 
     async def scan_all(self) -> list[dict]:
         """Tüm coinleri paralel tara ve aktif sinyalleri dön"""
@@ -127,18 +201,49 @@ class MarketScanner:
         
         logger.info(f"🔍 {len(self.symbols)} parite momentum için taranıyor...")
         
+        # 🎯 ÖNCE: Bekleyen pullback'leri kontrol et
+        pullback_signals = []
+        if PULLBACK_ENABLED and self.pending_signals:
+            logger.info(f"⏳ {len(self.pending_signals)} bekleyen pullback kontrol ediliyor...")
+            pullback_signals = await self.check_pending_pullbacks()
+        
         # Paralel tarama (Batch processing)
         tasks = [self.scan_symbol(sym) for sym in self.symbols]
         results = await asyncio.gather(*tasks)
         
-        # None olmayanları (aktif sinyalleri) filtrele
-        signals = [s for s in results if s is not None]
+        # Yeni sinyalleri işle
+        new_signals = []
+        for signal in results:
+            if signal is None:
+                continue
+            
+            # PENDING_PULLBACK sinyallerini bekleyenlere ekle
+            if signal.get('side') == 'PENDING_PULLBACK':
+                pending = signal.get('pending_signal')
+                if pending and pending.symbol not in self.pending_signals:
+                    self.pending_signals[pending.symbol] = pending
+                    # Detaylı seviye bilgisi
+                    levels = [f"Fib{lvl*100:.0f}%" for lvl in sorted(pending.fib_levels)]
+                    logger.info(f"🎯 {pending.symbol} PULLBACK QUEUE | {' | '.join(levels)} | Timeout: {len(pending.fib_levels)*3}m")
+            else:
+                # Direkt işleme hazır sinyal
+                new_signals.append(signal)
+        
+        # Pullback'ten gelen sinyalleri birleştir
+        all_signals = pullback_signals + new_signals
 
-        if signals:
-            logger.info(f"🎯 {len(signals)} MOMENTUM SİNYALİ BULUNDU!")
-            for sig in signals:
-                logger.info(f"✅ {sig['symbol']}: {sig['side']} | {sig['reason']}")
+        if all_signals:
+            pullback_count = len([s for s in all_signals if s.get('allocation', 1.0) < 1.0])
+            full_count = len(all_signals) - pullback_count
+            logger.info(f"🎯 {len(all_signals)} SINYAL ({full_count} tam + {pullback_count} kademeli)")
+            for sig in all_signals:
+                alloc_info = f" [{sig.get('allocation', 1.0):.0%}]" if sig.get('allocation') else ""
+                logger.info(f"✅ {sig['symbol']}: {sig['side']}{alloc_info} | {sig.get('reason', '')}")
         else:
-            logger.info("🔍 Kriterlere uygun momentum hareketi bulunamadı.")
+            pending_count = len(self.pending_signals)
+            if pending_count > 0:
+                logger.info(f"🔍 Aktif sinyal yok. ⏳ {pending_count} pullback bekliyor.")
+            else:
+                logger.info("🔍 Kriterlere uygun momentum hareketi bulunamadı.")
 
-        return signals
+        return all_signals

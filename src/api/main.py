@@ -2,17 +2,44 @@
 📡 Bugra-Bot Monitoring API
 Northflank üzerinde botun durumunu izlemek için
 """
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional
 from datetime import datetime
+from enum import Enum
 import io
 import csv
+import json
 from bot.redis_client import redis_client
 from bot.config import LOG_LEVEL
 
 app = FastAPI(title="Bugra-Bot API", version="3.0.0")
+
+# --- Replay Modelleri ---
+class ReplayStatus(str, Enum):
+    IDLE = "idle"
+    RUNNING = "running"
+    PAUSED = "paused"
+    COMPLETED = "completed"
+
+class ReplayConfig(BaseModel):
+    start_date: str = Field(..., description="Başlangıç tarihi (YYYY-MM-DD)")
+    end_date: str = Field(..., description="Bitiş tarihi (YYYY-MM-DD)")
+    speed: float = Field(100.0, description="Hız çarpanı (1.0 = gerçek zaman)")
+    symbols: List[str] = Field([], description="Test edilecek coinler (boş = tümü)")
+    initial_balance: float = Field(10000.0, description="Başlangıç bakiyesi")
+    
+class ReplayState(BaseModel):
+    status: ReplayStatus
+    current_time: Optional[str] = None
+    progress_pct: float = 0.0
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    speed: float = 100.0
+    symbols_tested: int = 0
+    trades_executed: int = 0
+    final_balance: Optional[float] = None
 
 # --- Modeller ---
 class PositionModel(BaseModel):
@@ -152,3 +179,108 @@ async def reset_stats():
     """İstatistikleri sıfırla (Gelişmiş kontrol için)"""
     await redis_client.delete("bot:stats")
     return {"status": "reset requested"}
+
+# --- Replay Mode Endpoints ---
+
+@app.get("/replay/status", response_model=ReplayState)
+async def get_replay_status():
+    """Replay modunun mevcut durumunu getir"""
+    state = await redis_client.get("replay:state")
+    if not state:
+        return ReplayState(status=ReplayStatus.IDLE)
+    return ReplayState(**state)
+
+@app.post("/replay/start")
+async def start_replay(config: ReplayConfig, background_tasks: BackgroundTasks):
+    """
+    Replay modunu başlat
+    
+    Örnek:
+    ```json
+    {
+        "start_date": "2026-01-15",
+        "end_date": "2026-01-16",
+        "speed": 1000,
+        "symbols": ["BTCUSDT", "ETHUSDT"],
+        "initial_balance": 10000
+    }
+    ```
+    """
+    # Mevcut durumu kontrol et
+    current = await redis_client.get("replay:state")
+    if current and current.get("status") == ReplayStatus.RUNNING:
+        raise HTTPException(status_code=400, detail="Replay zaten çalışıyor")
+    
+    # Replay konfigürasyonunu Redis'e kaydet
+    replay_config = {
+        "status": ReplayStatus.RUNNING,
+        "start_date": config.start_date,
+        "end_date": config.end_date,
+        "speed": config.speed,
+        "symbols": config.symbols,
+        "initial_balance": config.initial_balance,
+        "current_time": config.start_date,
+        "progress_pct": 0.0,
+        "trades_executed": 0,
+        "started_at": datetime.now().isoformat()
+    }
+    
+    await redis_client.set("replay:state", replay_config)
+    await redis_client.set("replay:command", {"action": "start", "config": config.dict()})
+    
+    return {
+        "status": "started",
+        "message": f"Replay başlatıldı: {config.start_date} → {config.end_date} @ {config.speed}x",
+        "config": config
+    }
+
+@app.post("/replay/stop")
+async def stop_replay():
+    """Replay modunu durdur"""
+    await redis_client.set("replay:command", {"action": "stop"})
+    
+    state = await redis_client.get("replay:state") or {}
+    state["status"] = ReplayStatus.IDLE
+    await redis_client.set("replay:state", state)
+    
+    return {"status": "stopped", "message": "Replay durduruldu"}
+
+@app.post("/replay/pause")
+async def pause_replay():
+    """Replay modunu duraklat"""
+    await redis_client.set("replay:command", {"action": "pause"})
+    
+    state = await redis_client.get("replay:state") or {}
+    state["status"] = ReplayStatus.PAUSED
+    await redis_client.set("replay:state", state)
+    
+    return {"status": "paused", "message": "Replay duraklatıldı"}
+
+@app.post("/replay/resume")
+async def resume_replay():
+    """Replay modunu devam ettir"""
+    await redis_client.set("replay:command", {"action": "resume"})
+    
+    state = await redis_client.get("replay:state") or {}
+    state["status"] = ReplayStatus.RUNNING
+    await redis_client.set("replay:state", state)
+    
+    return {"status": "resumed", "message": "Replay devam ediyor"}
+
+@app.get("/replay/available-symbols")
+async def get_available_symbols():
+    """Replay için kullanılabilir coinleri listele"""
+    import os
+    from bot.config import REPLAY_DATA_FOLDER
+    
+    symbols = []
+    if os.path.exists(REPLAY_DATA_FOLDER):
+        for f in os.listdir(REPLAY_DATA_FOLDER):
+            if f.endswith('_USDT_USDT.csv') and not f.startswith('_'):
+                coin = f.replace('_USDT_USDT.csv', '')
+                symbols.append(f"{coin}USDT")
+    
+    return {
+        "count": len(symbols),
+        "symbols": sorted(symbols)
+    }

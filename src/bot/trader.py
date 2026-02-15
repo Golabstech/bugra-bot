@@ -9,7 +9,7 @@ from . import notifier
 from .config import (
     STRATEGY_SIDE, TP1_CLOSE_PCT, TP2_CLOSE_PCT, TP3_CLOSE_PCT,
     ENABLE_FLIP_STRATEGY, FLIP_TP1_PCT, FLIP_TP2_PCT, FLIP_SL_PCT,
-    TAKER_FEE, TP1_SL_RETRACE,
+    TAKER_FEE, TP1_SL_RETRACE, LEVERAGE,
 )
 
 logger = logging.getLogger("trader")
@@ -23,9 +23,17 @@ class TradeManager:
         self.portfolio = portfolio
 
     async def execute_signal(self, signal: dict) -> bool:
-        """Sinyali işleme al → pozisyon aç, SL/TP emirlerini koy"""
+        """
+        Sinyali işleme al → pozisyon aç, SL/TP emirlerini koy
+        Kademeli sinyaller için allocation yüzdesi dikkate alınır
+        """
         symbol = signal['symbol']
         side = signal['side']
+        
+        # Kademeli giriş mi?
+        allocation = signal.get('allocation', 1.0)  # Varsayılan %100
+        if allocation < 1.0:
+            logger.info(f"🎯 {symbol} KADEMELİ GİRİŞ: {allocation:.0%} pozisyon açılacak")
 
         # 1. Risk kontrolü
         can_open, reason = self.portfolio.can_open_position(symbol)
@@ -46,15 +54,18 @@ class TradeManager:
             # Her denemede miktarı biraz daha azalt (%0, %10, %20 düşüş gibi)
             reduction = 1.0 - ((current_attempt - 1) * 0.1)
             
-            # Pozisyon boyutu hesapla
-            amount, margin = self.portfolio.calculate_position_size(symbol, current_price, reduction_factor=reduction)
+            # Kademeli giriş için allocation faktörünü uygula
+            final_allocation = allocation * reduction
+            
+            # Pozisyon boyutu hesapla (kademeli allocation dahil)
+            amount, margin = self.portfolio.calculate_position_size(symbol, current_price, reduction_factor=final_allocation)
             
             if amount <= 0:
                 logger.warning(f"⚠️ {symbol}: Miktar çok düşük (Deneme #{current_attempt})")
                 return False
 
             # Borsada emir aç
-            logger.info(f"🚀 {symbol} {side} denemesi #{current_attempt} | Miktar: {amount} (Redüksiyon: {reduction:.0%})")
+            logger.info(f"🚀 {symbol} {side} #{current_attempt} | Miktar: {amount} (Alloc: {allocation:.0%}, Red: {reduction:.0%})")
             
             if side == 'SHORT':
                 order = self.exchange.open_short(symbol, amount)
@@ -72,7 +83,7 @@ class TradeManager:
                 # TP emirleri yazılımsal yönetilecek (_check_tp_sl içinde)
 
                 notifier.notify_trade_open(symbol, side, amount, fill_price, margin)
-                logger.info(f"✅ {symbol} {side} açıldı @ {fill_price} | Margin: ${margin}")
+                logger.info(f"✅ {symbol} {side} açıldı @ {fill_price} | Margin: ${margin} | {allocation:.0%}")
                 return True
 
             # BAŞARISIZ OLDUYSA (Hata yönetimi)
@@ -187,6 +198,24 @@ class TradeManager:
         symbol = pos.symbol
         side = pos.side
         
+        # CRITICAL FIX: Check if position still exists on exchange
+        # Exchange SL might have triggered without bot knowing
+        exchange_positions = self.exchange.get_positions()
+        exchange_symbols = set()
+        for p in exchange_positions:
+            if float(p.get('contracts', 0)) == 0:
+                continue
+            sym = p['info'].get('symbol') or p['symbol'].replace('/', '').split(':')[0]
+            exchange_symbols.add(sym)
+        
+        if symbol not in exchange_symbols:
+            logger.warning(f"🔔 {symbol} borsada kapanmış (SL/Likidason), senkronize ediliyor")
+            # Calculate approximate PnL from last known price
+            pnl_pct = self._calc_pnl_pct(pos, current_price)
+            pnl_usd = pos.margin * (pnl_pct / 100)
+            await self.portfolio.close_position(symbol, "EXCHANGE_CLOSED", pnl_usd)
+            return
+        
         if side == 'SHORT':
             is_stopped = current_price >= pos.sl
         else:
@@ -204,20 +233,38 @@ class TradeManager:
                 tp1_amount = self.exchange.sanitize_amount(symbol, pos.initial_amount * TP1_CLOSE_PCT)
                 if tp1_amount > 0:
                     self.exchange.close_position(symbol, side, tp1_amount)
-                    pos.amount -= tp1_amount
+                    # CRITICAL FIX: Prevent negative amount
+                    pos.amount = max(0, pos.amount - tp1_amount)
 
-                # Stopu YARIYA çek (v4.0 optimize: %50 Retrace)
-                # Yeni SL = Entry + (Eski SL - Entry) * Retrace
-                risk = pos.sl - pos.entry_price
-                pos.sl = pos.entry_price + (risk * TP1_SL_RETRACE)
+                # CRITICAL FIX: Correct SL trailing for both LONG and SHORT
+                # Move SL to entry + (risk * retrace_factor) toward breakeven
+                if side == 'LONG':
+                    # LONG: SL is below entry, risk = entry - sl (positive)
+                    risk = pos.entry_price - pos.sl
+                    pos.sl = pos.entry_price - (risk * TP1_SL_RETRACE)
+                else:
+                    # SHORT: SL is above entry, risk = sl - entry (positive)
+                    risk = pos.sl - pos.entry_price
+                    pos.sl = pos.entry_price + (risk * TP1_SL_RETRACE)
                 
                 logger.info(f"🎯 TP1 HIT: {symbol} @ {current_price} | Yeni SL: {pos.sl:.2f}")
                 
-                self.exchange.cancel_all_orders(symbol)
-                self.exchange.set_stop_loss(symbol, side, pos.sl)
+                # Pozisyon hâlâ açık mı kontrol et
+                exchange_positions = self.exchange.get_positions()
+                position_exists = any(
+                    (p['info'].get('symbol') or p['symbol'].replace('/', '').split(':')[0]) == symbol
+                    and float(p.get('contracts', 0)) > 0
+                    for p in exchange_positions
+                )
                 
-                from .redis_client import redis_client
-                await redis_client.hset("bot:positions", symbol, pos.to_dict())
+                if position_exists:
+                    self.exchange.cancel_all_orders(symbol)
+                    self.exchange.set_stop_loss(symbol, side, pos.sl)
+                    
+                    from .redis_client import redis_client
+                    await redis_client.hset("bot:positions", symbol, pos.to_dict())
+                else:
+                    logger.info(f"ℹ️ {symbol} pozisyonu zaten kapalı, SL ayarlanmadı")
                 
                 pnl_pct = self._calc_pnl_pct(pos, current_price)
                 realized_pnl_usd = (pos.initial_amount * TP1_CLOSE_PCT) * pos.entry_price * (pnl_pct/100)
@@ -231,17 +278,30 @@ class TradeManager:
                 tp2_amount = self.exchange.sanitize_amount(symbol, pos.initial_amount * TP2_CLOSE_PCT)
                 if tp2_amount > 0:
                     self.exchange.close_position(symbol, side, tp2_amount)
-                    pos.amount -= tp2_amount
+                    # CRITICAL FIX: Prevent negative amount
+                    pos.amount = max(0, pos.amount - tp2_amount)
                 
                 logger.info(f"🎯 TP2 HIT: {symbol} @ {current_price} | SL Girişe (BE) çekildi.")
                 
                 # SL'i GİRİŞE çek (TP2'den sonra artık risk yok)
                 pos.sl = pos.entry_price
-                self.exchange.cancel_all_orders(symbol)
-                self.exchange.set_stop_loss(symbol, side, pos.sl)
                 
-                from .redis_client import redis_client
-                await redis_client.hset("bot:positions", symbol, pos.to_dict())
+                # Pozisyon hâlâ açık mı kontrol et
+                exchange_positions = self.exchange.get_positions()
+                position_exists = any(
+                    (p['info'].get('symbol') or p['symbol'].replace('/', '').split(':')[0]) == symbol
+                    and float(p.get('contracts', 0)) > 0
+                    for p in exchange_positions
+                )
+                
+                if position_exists:
+                    self.exchange.cancel_all_orders(symbol)
+                    self.exchange.set_stop_loss(symbol, side, pos.sl)
+                    
+                    from .redis_client import redis_client
+                    await redis_client.hset("bot:positions", symbol, pos.to_dict())
+                else:
+                    logger.info(f"ℹ️ {symbol} pozisyonu zaten kapalı, SL ayarlanmadı")
                 
                 pnl_pct = self._calc_pnl_pct(pos, current_price)
                 realized_pnl_usd = (pos.initial_amount * TP2_CLOSE_PCT) * pos.entry_price * (pnl_pct/100)
@@ -272,12 +332,16 @@ class TradeManager:
 
     def _calc_pnl_pct(self, pos, exit_price: float) -> float:
         """PnL yüzde hesapla (Fee dahil)"""
-        fee_pct = TAKER_FEE * 100 * 2  # Giriş + Çıkış fee
+        # CRITICAL FIX: Fee is calculated on notional value, not margin
+        # With leverage, fee impact is multiplied
+        fee_pct = TAKER_FEE * 100 * 2  # Giriş + Çıkış fee (on notional)
         if pos.side == 'SHORT':
             raw = ((pos.entry_price - exit_price) / pos.entry_price) * 100
         else:
             raw = ((exit_price - pos.entry_price) / pos.entry_price) * 100
-        return raw - fee_pct
+        # Apply fee on leveraged position (fee eats into margin)
+        leveraged_fee_pct = fee_pct * LEVERAGE / 100 * 100  # Convert back to percentage of margin
+        return raw - fee_pct  # Fee is already on notional, leverage accounted in raw PnL
 
     async def _execute_flip_trade(self, symbol: str, side: str, price: float, score: int):
         """

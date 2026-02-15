@@ -29,7 +29,14 @@ async def _send_async(text: str, parse_mode: str = "HTML"):
                 },
             )
     except Exception as e:
-        logger.error(f"❌ Telegram hatası: {e}", exc_info=True)
+        # Timeout ve bağlantı hatalarını sessizce geç, sadece kritik hataları logla
+        error_str = str(e)
+        if "timeout" in error_str.lower() or "ConnectTimeout" in error_str:
+            logger.debug(f"📵 Telegram timeout (görmezden gelindi): {type(e).__name__}")
+        elif "Cannot connect to host" in error_str or "getaddrinfo failed" in error_str:
+            logger.debug(f"📵 Telegram bağlantı hatası (görmezden gelindi): {type(e).__name__}")
+        else:
+            logger.error(f"❌ Telegram hatası: {e}")
 
 
 def send(text: str):
