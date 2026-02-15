@@ -14,8 +14,11 @@ from datetime import datetime, timedelta
 # ==========================================
 # ⚙️ AYARLAR
 # ==========================================
-DATA_FOLDER = "backtest_data"
-DAYS_TO_FETCH = 60          # 2 ay
+# Proje köküne göre tam yol
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(SCRIPT_DIR))
+DATA_FOLDER = os.path.join(PROJECT_ROOT, "backtest_data")
+DAYS_TO_FETCH = 30          # 1 ay
 START_RANK = 1              # İlk 100
 END_RANK = 100
 TIMEFRAME = '15m'
@@ -106,12 +109,14 @@ def fetch_and_save_data():
     
     print(f"✅ {len(coins)} coin bulundu\n")
     
-    # Belirli tarih aralığı: 2026-01-12 - 2026-01-21
-    start_date = datetime(2026, 1, 12)
-    end_date = datetime(2026, 1, 21, 23, 59)
+    # Son 30 Günlük Veri: 2026-01-14 - 2026-02-14
+    end_date = datetime(2026, 2, 14, 23, 59)
+    start_date = end_date - timedelta(days=30)
+    
     since = int(start_date.timestamp() * 1000)
-    # 15dk periyot, 15 gün = 15*24*4 = 1440 mum
-    limit = int((end_date - start_date).total_seconds() // (15*60))
+    # 15dk periyot, 30 gün = 30*24*4 = 2880 mum
+    limit_candles = int((end_date - start_date).total_seconds() // (15*60))
+    limit = limit_candles # fetch_ohlcv_with_retry içinde handle ediliyor
     
     saved_count = 0
     coin_list = []

@@ -31,11 +31,27 @@ class VersionBumper:
         self.current_version = self._get_current_version()
         
     def _get_current_version(self) -> str:
-        """Extract current version from config file"""
+        """Extract current version from git tags or config file"""
+        try:
+            # Get latest tag from git
+            result = subprocess.run(
+                ['git', 'describe', '--tags', '--abbrev=0'],
+                capture_output=True, text=True
+            )
+            if result.returncode == 0:
+                tag = result.stdout.strip()
+                # Remove 'v' prefix if present
+                if tag.startswith('v'):
+                    tag = tag[1:]
+                return tag
+        except:
+            pass
+        
+        # Fallback to config file
         if not self.version_file.exists():
             return "3.0.0"
             
-        content = self.version_file.read_text()
+        content = self.version_file.read_text(encoding='utf-8')
         match = re.search(r'VERSION\s*=\s*["\']([\d.]+)["\']', content)
         return match.group(1) if match else "3.0.0"
     
@@ -171,13 +187,13 @@ class VersionBumper:
     def _update_version_file(self, new_version: str):
         """Update version in config file"""
         if self.version_file.exists():
-            content = self.version_file.read_text()
+            content = self.version_file.read_text(encoding='utf-8')
             content = re.sub(
                 r'VERSION\s*=\s*["\'][\d.]+["\']',
                 f'VERSION = "{new_version}"',
                 content
             )
-            self.version_file.write_text(content)
+            self.version_file.write_text(content, encoding='utf-8')
             print(f"✅ Updated {self.version_file} to v{new_version}")
     
     def _update_changelog(self, entry: str):
@@ -185,7 +201,7 @@ class VersionBumper:
         changelog = Path("CHANGELOG.md")
         
         if changelog.exists():
-            content = changelog.read_text()
+            content = changelog.read_text(encoding='utf-8')
             # Insert after header
             lines = content.split('\n')
             header_end = 0
@@ -194,10 +210,10 @@ class VersionBumper:
                     header_end = i + 1
             
             new_content = '\n'.join(lines[:header_end]) + '\n\n' + entry + '\n'.join(lines[header_end:])
-            changelog.write_text(new_content)
+            changelog.write_text(new_content, encoding='utf-8')
         else:
             header = "# Changelog\n\nAll notable changes to this project will be documented here.\n\n"
-            changelog.write_text(header + entry)
+            changelog.write_text(header + entry, encoding='utf-8')
         
         print(f"✅ Updated CHANGELOG.md")
     

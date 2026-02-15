@@ -356,6 +356,18 @@ murat/
 ---
 
 ## Sonraki Adımlar (Planlar)
+
+## [3.1.0] - 2026-02-15
+
+## [3.2.0] - 2026-02-15
+
+### ✨ Features
+- add conventional commits and semantic versioning
+- Add API-controlled replay mode for live engine backtesting
+
+### ✨ Features
+- add conventional commits and semantic versioning
+- Add API-controlled replay mode for live engine backtesting
 - [x] İlk 100 coin için 2 aylık veri çekimi (veri_cek.py güncellendi)
 - [x] LONG sinyal stratejisi ekleme (swing_bot.py çift yönlü)
 - [x] Top performer coin listesi oluşturma
